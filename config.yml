@@ -116,7 +116,12 @@ jobs:
       - setup-project
       - run:
           name: run static tests
-          command: ./vendor/fourkitchens/acquia_ci/scripts/test/static
+          command: |
+            if [ -f "./.circleci/scripts/test/static" ]; then
+              ./.circleci/scripts/test/static
+            else
+              ./vendor/fourkitchens/acquia_ci/scripts/test/static
+            fi
 
   # Job used to create what will be committed to the Artifact.
   #
@@ -128,10 +133,20 @@ jobs:
       - setup-project
       - run:
           name: run PHP build step
-          command: ./vendor/fourkitchens/acquia_ci/scripts/build/php
+          command: |
+            if [ -f "./.circleci/scripts/build/php" ]; then
+              ./.circleci/scripts/build/build/php
+            else
+              ./vendor/fourkitchens/acquia_ci/scripts/build/php
+            fi
       - run:
           name: run theme build step
-          command: ./vendor/fourkitchens/acquia_ci/scripts/build/theme
+          command: |
+            if [ -f "./.circleci/scripts/build/theme" ]; then
+              ./.circleci/scripts/build/theme
+            else
+              ./vendor/fourkitchens/acquia_ci/scripts/build/theme
+            fi
       - save-project
 
   # Job used to deploy to a remote environment.
@@ -144,7 +159,12 @@ jobs:
       - restore-project
       - run:
           name: Deploy the code
-          command: ./vendor/fourkitchens/acquia_ci/scripts/deploy
+          command: |
+            if [ -f "./.circleci/scripts/deploy" ]; then
+              ./.circleci/scripts/deploy
+            else
+              ./vendor/fourkitchens/acquia_ci/scripts/deploy
+            fi
 
   # Run this on one of the main branches to push a release back to github.
   #
@@ -156,7 +176,12 @@ jobs:
       - setup-project
       - run:
           name: Publish a Release
-          command: ./vendor/fourkitchens/acquia_ci/scripts/release
+          command: |
+            if [ -f "./.circleci/scripts/release" ]; then
+              ./.circleci/scripts/release
+            else
+              ./vendor/fourkitchens/acquia_ci/scripts/release
+            fi
 
 workflows:
   version: 2
