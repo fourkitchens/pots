@@ -1,0 +1,185 @@
+version: 2.1
+
+defaults: &defaults
+  executor:
+    name: php/default
+    tag: '7.4'
+  working_directory: ~/project
+  environment:
+    # Required environmental variables should be set via the CircleCI web interface:
+    #
+    # - ACQUIA_CANONICAL_ENV
+    #     Environment to get database from. Usually "prod".
+    # - ACQUIA_REALM
+    #     Cloud API Realm. Usually "prod" or "devcloud".
+    #     See: https://docs.acquia.com/acquia-cloud/api#realm
+    # - ACQUIA_SITE
+    #     Cloud API Site parameter.
+    # - ACQUIA_REPO
+    #     Acquia git repo url.
+    # - ACQUIA_BOT_EMAIL
+    #     Email used to commit deployment commits.
+    # - ACQUIA_BOT_NAME
+    #     Display name use for the deployment committer.
+    # - ACQUIACLI_KEY
+    #     Cloud API Private key generated when you generate a token.
+    #     Used in creating and getting backups and other Acquia Cloud actions.
+    #     See: https://github.com/typhonius/acquia_cli#generating-an-api-access-token
+    # - ACQUIACLI_SECRET
+    #     Cloud API secret generated when you generate a token.
+    DATE_TIMEZONE: America/Chicago
+    TERM: xterm
+
+###### Please do not change things in the commands without contributing back.
+orbs:
+  node: circleci/node@4.1.0
+  php: circleci/php@1.1.0
+commands:
+  install-node-from-nvmrc:
+    description: Workaround for installing node on projects with .nvmrc files.
+    steps:
+      # Work around for node install issue. This happens because nvm checks
+      # to see if the version of node in the .nvmrc exists before it does
+      # anything else. Therefore, we have to remove the .nvmrc file before we
+      # install nvm, and then put it back. Afterwards, we set the version of
+      # node in the .nvmrc file as the default.
+      # see: https://github.com/CircleCI-Public/node-orb/issues/65
+      - run: rm .nvmrc
+      - node/install
+      - run: git checkout .nvmrc
+      - run: nvm install; nvm alias default `cat .nvmrc`
+      - run: node --version
+  install-project-dependency-managers:
+    description: setup composer and npm.
+    steps:
+      # Most projects require both composer and npm to be installed to do
+      # anything.
+      - php/install-composer
+      - install-node-from-nvmrc
+  install-project-dependencies:
+    description: install both npm and composer dependencies
+    steps:
+      - php/install-packages
+      # Lets install the node packages as they are defined by the lock file
+      # in the project.
+      - node/install-packages:
+          cache-path: ~/project/node_modules
+          override-ci-command: npm ci
+  setup-project:
+    description: setup php and node and download all dependencies for the project.
+    steps:
+      - checkout
+      - install-project-dependency-managers
+      - install-project-dependencies
+  save-project:
+    description: Persist the Drupal project so other jobs can use it.
+    parameters:
+      drupal_root:
+        description: "Where composer installs drupal."
+        # Change the value here or add a parameter to where this is called.
+        default: "docroot"
+        type: string
+    steps:
+      - persist_to_workspace:
+          root: .
+          paths:
+            # Change this
+            - << parameters.drupal_root >>
+            - vendor
+            - drush
+  restore-project:
+    description: Restore a Drupal project that was persisted from another job.
+    parameters:
+      drupal_root:
+        description: "Where composer installs drupal."
+        # Change the value here or add a parameter to where this is called.
+        default: "docroot"
+        type: string
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp
+      # Rsync the build artifact pieces al
+      - run:
+          name: sync build artifact
+          command: |
+            sudo apt-get update -y
+            sudo apt-get -y install rsync
+            rsync -lrz /tmp/<< parameters.drupal_root >> /tmp/vendor /tmp/drush .
+
+##### Feel free to alter the tasks below to point to your own tasks.
+jobs:
+  # Static Testing. This will run independently of a build to fail quickly.
+  static_tests:
+    <<: *defaults
+    steps:
+      - setup-project
+      - run:
+          name: run static tests
+          command: ./.circleci/scripts/test/static
+
+  # Job used to create what will be committed to the Artifact.
+  #
+  # You will have all the dependency managers installed here in case you need
+  # them.
+  build:
+    <<: *defaults
+    steps:
+      - setup-project
+      - run:
+          name: run PHP build step
+          command: ./.circleci/scripts/build/php
+      - run:
+          name: run theme build step
+          command: ./.circleci/scripts/build/theme
+      - save-project:
+
+  # Job used to deploy to a remote environment.
+  #
+  # This could be as simple as pushing the artifact to a remote git repo or as
+  # complicated as building a remote environment to push to.
+  deploy:
+    <<: *defaults
+    steps:
+      - restore-project:
+      - run:
+          name: Deploy the code
+          command: ./.circleci/scripts/deploy
+
+  # Run this on one of the main branches to push a release back to github.
+  #
+  # This usually will do things like create a change log and bump the version
+  # on the source repository.
+  release:
+    <<: *defaults
+    steps:
+      - setup-project
+      - run:
+          name: Publish a Release
+          command: ./.circleci/scripts/release
+
+workflows:
+  version: 2
+  build-deploy:
+    jobs:
+      - static_tests
+      - build
+      - deploy:
+          requires:
+            - static_tests
+            - build
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - develop
+                - /release-.*/
+      - release:
+          requires:
+          - deploy
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'

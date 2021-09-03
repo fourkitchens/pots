@@ -1,0 +1,11 @@
+{
+    "name": "fourkitchens/acquia_ci",
+    "description": "Scripts to help aid in deployment for Acquia Drupal sites",
+    "authors": [
+        {
+            "name": "Allan Chappell",
+            "email": "allan@fourkitchens.com"
+        }
+    ],
+    "require": {}
+}
