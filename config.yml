@@ -116,7 +116,7 @@ jobs:
       - setup-project
       - run:
           name: run static tests
-          command: ./.circleci/scripts/test/static
+          command: ./vendor/fourkitchens/acquia_ci/scripts/test/static
 
   # Job used to create what will be committed to the Artifact.
   #
@@ -128,11 +128,11 @@ jobs:
       - setup-project
       - run:
           name: run PHP build step
-          command: ./.circleci/scripts/build/php
+          command: ./vendor/fourkitchens/acquia_ci/scripts/build/php
       - run:
           name: run theme build step
-          command: ./.circleci/scripts/build/theme
-      - save-project:
+          command: ./vendor/fourkitchens/acquia_ci/scripts/build/theme
+      - save-project
 
   # Job used to deploy to a remote environment.
   #
@@ -141,10 +141,10 @@ jobs:
   deploy:
     <<: *defaults
     steps:
-      - restore-project:
+      - restore-project
       - run:
           name: Deploy the code
-          command: ./.circleci/scripts/deploy
+          command: ./vendor/fourkitchens/acquia_ci/scripts/deploy
 
   # Run this on one of the main branches to push a release back to github.
   #
@@ -156,7 +156,7 @@ jobs:
       - setup-project
       - run:
           name: Publish a Release
-          command: ./.circleci/scripts/release
+          command: ./vendor/fourkitchens/acquia_ci/scripts/release
 
 workflows:
   version: 2
