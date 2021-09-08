@@ -120,7 +120,7 @@ jobs:
             if [ -f "./.circleci/scripts/test/static" ]; then
               ./.circleci/scripts/test/static
             else
-              ./vendor/fourkitchens/acquia_ci/scripts/test/static
+              ./vendor/fourkitchens/project_ci/scripts/test/static
             fi
 
   # Job used to create what will be committed to the Artifact.
@@ -137,7 +137,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/php" ]; then
               ./.circleci/scripts/build/build/php
             else
-              ./vendor/fourkitchens/acquia_ci/scripts/build/php
+              ./vendor/fourkitchens/project_ci/scripts/build/php
             fi
       - run:
           name: run theme build step
@@ -145,7 +145,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/theme" ]; then
               ./.circleci/scripts/build/theme
             else
-              ./vendor/fourkitchens/acquia_ci/scripts/build/theme
+              ./vendor/fourkitchens/project_ci/scripts/build/theme
             fi
       - save-project
 
@@ -163,7 +163,7 @@ jobs:
             if [ -f "./.circleci/scripts/deploy" ]; then
               ./.circleci/scripts/deploy
             else
-              ./vendor/fourkitchens/acquia_ci/scripts/deploy
+              ./vendor/fourkitchens/project_ci/scripts/deploy
             fi
 
   # Run this on one of the main branches to push a release back to github.
@@ -180,7 +180,7 @@ jobs:
             if [ -f "./.circleci/scripts/release" ]; then
               ./.circleci/scripts/release
             else
-              ./vendor/fourkitchens/acquia_ci/scripts/release
+              ./vendor/fourkitchens/project_ci/scripts/release
             fi
 
 workflows:

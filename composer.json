@@ -1,6 +1,6 @@
 {
-    "name": "fourkitchens/acquia_ci",
-    "description": "Scripts to help aid in deployment for Acquia Drupal sites",
+    "name": "fourkitchens/project_ci",
+    "description": "Scripts to help aid in deployment for sites.",
     "authors": [
         {
             "name": "Allan Chappell",

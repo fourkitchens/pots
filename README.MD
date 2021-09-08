@@ -1,18 +1,20 @@
-# Acquia Circle CI Starter
+# Circle CI Starter for Projects
 
 This Composer package provides the starts for what you need to test and deploy
-an Acquia hosted site.
+an hosted site on something like Acquia.
 
 ## Installation
 
 1. Install the package and copy over the template config.yml
 
     ```
-    composer require fourkitchens/acquia_ci
+    composer require fourkitchens/project_ci
     mkdir .circleci
-    cp vendor/fourkichens/acquia_ci/config.yml .circleci/config.yml
+    cp vendor/fourkichens/project_ci/config.yml .circleci/config.yml
     ```
 2. Set up your circleci project to with the required environment variables
+
+    **TODO: Make this not Acquia specific.**
 
     ```
     # Required environmental variables should be set via the CircleCI web interface:
@@ -37,7 +39,7 @@ an Acquia hosted site.
     # - ACQUIACLI_SECRET
     #     Cloud API secret generated when you generate a token.
     ```
-3. Customize any scripts by copying a script from `./vendor/fourkitchens/acquia_ci/scripts` to `.circleci/scripts`
+3. Customize any scripts by copying a script from `./vendor/fourkitchens/project_ci/scripts` to `.circleci/scripts`
 4. Customize the web root directory if you must by changing all instances of `default: "docroot"` to the value you need.
-5. Make sure you have a `.nvmrc` file with a valide verison of node at the root
+5. Make sure you have a `.nvmrc` file with a valid verison of node at the root
    of the project.
