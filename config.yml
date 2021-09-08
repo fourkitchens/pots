@@ -8,6 +8,8 @@ defaults: &defaults
   environment:
     # Required environmental variables should be set via the CircleCI web interface:
     #
+    # - HOST_VARIANT
+    #     One of "general" or "acquia"
     # - ACQUIA_CANONICAL_ENV
     #     Environment to get database from. Usually "prod".
     # - ACQUIA_REALM
@@ -27,6 +29,7 @@ defaults: &defaults
     #     See: https://github.com/typhonius/acquia_cli#generating-an-api-access-token
     # - ACQUIACLI_SECRET
     #     Cloud API secret generated when you generate a token.
+    HOST_VARIANT: acquia
     DATE_TIMEZONE: America/Chicago
     TERM: xterm
 

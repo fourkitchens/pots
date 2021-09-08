@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+$SCRIPT_DIR/install-acquia-cli.sh
+echo "deploying to the $circle_branch on acquia."
+git config --global user.email "$ACQUIA_BOT_EMAIL"
+git config --global user.name "$ACQUIA_BOT_NAME"
+git remote add acquia $ACQUIA_REPO
+ssh-keyscan -H $(echo "$ACQUIA_REPO" | sed 's/.*@\(.*\):.*/\1/') >> ~/.ssh/known_hosts
+git fetch acquia
+# "sed -i '1,/######## ACQUIA IGNORE BELOW THIS LINE ########/d' .gitignore"
+mv -f ./.gitignore-acquia ./.gitignore
+# remove any .git directories that may exist in vendor libraries* so those
+# libraries don't get excluded from our repo. Remember kiddies somedir/*
+# returns all files/dirs that are NOT dot (hidden). This protects our repos'
+# .git folder from being blown away.
+find ./* -type d | grep .git | xargs rm -rf
+# Remove unwanted gitignores here. Follow the example below.
+# Remove simplesamlphp .gitignore which would cause our config and metadata
+# symlinks to be ignored. If it's already not there, GREAT!
+# - rm ./vendor/simplesamlphp/simplesamlphp/.gitignore || exit 0
+# Remove local settings
+rm -rf ./settings
+# Commit and push to Acquia.
+git add .
+git commit -am "Built assets."
+git push acquia $CIRCLE_BRANCH -f --tags
+echo "If deployment was successful, Acquia Cloud dev/post-code-update hook will handle importing config, updating db, and clearing caches."

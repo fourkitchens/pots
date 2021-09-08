@@ -10,3 +10,4 @@ echo "Compiling theme..."
 
 # Compile theme files and pattern lab.
 npm run theme-build
+rm ./docroot/themes/custom/*/.gitignore
