@@ -10,7 +10,7 @@ an hosted site on something like Acquia.
     ```
     composer require fourkitchens/project_ci
     mkdir .circleci
-    cp vendor/fourkichens/project_ci/config.yml .circleci/config.yml
+    cp vendor/fourkitchens/project_ci/config.yml .circleci/config.yml
     ```
 2. Set up your circleci project to with the required environment variables
 
