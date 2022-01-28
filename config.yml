@@ -1,116 +1,100 @@
 version: 2.1
 
+# To easily configure jobs here, parameters are set up below. Since we are
+# typically not calling this workflow via pipelines, consider changing the
+# defaults here for any permanent configuration you need to do on a project
+# by project basis.
+parameters:
+  php-version:
+    description: major.minor version number for php version to use.
+    type: string
+    # This value must be only a major.minor version is pantheon is the
+    # host-variant as the build-tool images do not support major.minor.patch
+    # version numbers.
+    default: "7.4"
+  tz:
+    description: The timezone definition.
+    type: string
+    default: "America/Chicago"
+  host-variant:
+    description: A string representing a site's host. EX acquia, pantheon
+    type: string
+    default: "acquia"
+  docroot:
+    description: "Where composer installs drupal."
+    default: "docroot"
+    type: string
+
+env: &env
+  #########################
+  # MANDITORY CONFIGURATION
+  #
+  # Set these either here in your config.yml or in CircleCI project Enviornment
+  # variables.
+  #########################
+
+  # A github access token so the bot user can comment back on the commit.
+  #
+  # GITHUB_TOKEN: 12345678790abcdef
+
+  ############################
+  # ACQUIA SPECIFIC SETTINGS
+  ############################
+
+  # Acquia git repo url.
+  #
+  # ACQUIA_REPO: sitename@svn-21939.prod.hosting.acquia.com:sitename.git
+
+  ############################
+  # PANTHEON SPECIFIC SETTINGS
+  ############################
+
+  # TERMINUS_TOKEN: The Pantheon machine token
+
+  ########################
+  # OPTIONAL CONFIGURATION
+  ########################
+
+  # An arbitrary email that will be used as the committer when building the
+  # artifact.
+  #
+  # Default: bender@fourkitchens.com
+  #
+  # GIT_EMAIL: bender@fourkitchens.com
+
+  # Name of the Acquia or Pantheon site to deploy to.
+  #
+  # Default: github repo name
+  #
+  # SITE_NAME: my_site
+
+  # Environment to get canonical database and files from
+  #
+  # Possible Values:
+  # For Acquia: dev, test prod
+  # For Pantheon: dev, test, live
+  #
+  # Default: "prod" on Acquia. "live" on Pantheon
+  # CANONICAL_ENV: dev
+  #
+  # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
+
+  ###########################
+  # STUFF THAT DOESN'T CHANGE
+  ###########################
+  HOST_VARIANT: << pipeline.parameters.host-variant >>
+  DATE_TIMEZONE: << pipeline.parameters.tz >>
+  DOCROOT: << pipeline.parameters.docroot >>
+  TERM: xterm
+
 defaults: &defaults
   executor:
     name: php/default
-    tag: '7.4'
-  working_directory: ~/project
+    tag: << pipeline.parameters.php-version >>
+  working_directory: ~/app
   environment:
-    # Required environmental variables should be set via the CircleCI web interface:
-    #
-    # - HOST_VARIANT
-    #     One of "general" or "acquia"
-    # - ACQUIA_CANONICAL_ENV
-    #     Environment to get database from. Usually "prod".
-    # - ACQUIA_REALM
-    #     Cloud API Realm. Usually "prod" or "devcloud".
-    #     See: https://docs.acquia.com/acquia-cloud/api#realm
-    # - ACQUIA_SITE
-    #     Cloud API Site parameter.
-    # - ACQUIA_REPO
-    #     Acquia git repo url.
-    # - ACQUIA_BOT_EMAIL
-    #     Email used to commit deployment commits.
-    # - ACQUIA_BOT_NAME
-    #     Display name use for the deployment committer.
-    # - ACQUIACLI_KEY
-    #     Cloud API Private key generated when you generate a token.
-    #     Used in creating and getting backups and other Acquia Cloud actions.
-    #     See: https://github.com/typhonius/acquia_cli#generating-an-api-access-token
-    # - ACQUIACLI_SECRET
-    #     Cloud API secret generated when you generate a token.
-    HOST_VARIANT: acquia
-    DATE_TIMEZONE: America/Chicago
-    TERM: xterm
+    <<: *env
 
-###### Please do not change things in the commands without contributing back.
-orbs:
-  node: circleci/node@4.1.0
-  php: circleci/php@1.1.0
-commands:
-  install-node-from-nvmrc:
-    description: Workaround for installing node on projects with .nvmrc files.
-    steps:
-      # Work around for node install issue. This happens because nvm checks
-      # to see if the version of node in the .nvmrc exists before it does
-      # anything else. Therefore, we have to remove the .nvmrc file before we
-      # install nvm, and then put it back. Afterwards, we set the version of
-      # node in the .nvmrc file as the default.
-      # see: https://github.com/CircleCI-Public/node-orb/issues/65
-      - run: rm .nvmrc
-      - node/install
-      - run: git checkout .nvmrc
-      - run: nvm install; nvm alias default `cat .nvmrc`
-      - run: node --version
-  install-project-dependency-managers:
-    description: setup composer and npm.
-    steps:
-      # Most projects require both composer and npm to be installed to do
-      # anything.
-      - php/install-composer
-      - install-node-from-nvmrc
-  install-project-dependencies:
-    description: install both npm and composer dependencies
-    steps:
-      - php/install-packages
-      # Lets install the node packages as they are defined by the lock file
-      # in the project.
-      - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm ci
-  setup-project:
-    description: setup php and node and download all dependencies for the project.
-    steps:
-      - checkout
-      - install-project-dependency-managers
-      - install-project-dependencies
-  save-project:
-    description: Persist the Drupal project so other jobs can use it.
-    parameters:
-      drupal_root:
-        description: "Where composer installs drupal."
-        # Change the value here or add a parameter to where this is called.
-        default: "docroot"
-        type: string
-    steps:
-      - persist_to_workspace:
-          root: .
-          paths:
-            # Change this
-            - << parameters.drupal_root >>
-            - vendor
-            - drush
-  restore-project:
-    description: Restore a Drupal project that was persisted from another job.
-    parameters:
-      drupal_root:
-        description: "Where composer installs drupal."
-        # Change the value here or add a parameter to where this is called.
-        default: "docroot"
-        type: string
-    steps:
-      - checkout
-      - attach_workspace:
-          at: /tmp
-      # Rsync the build artifact pieces al
-      - run:
-          name: sync build artifact
-          command: |
-            sudo apt-get update -y
-            sudo apt-get -y install rsync
-            rsync -lrz /tmp/<< parameters.drupal_root >> /tmp/vendor /tmp/drush .
-
-##### Feel free to alter the tasks below to point to your own tasks.
 jobs:
   # Static Testing. This will run independently of a build to fail quickly.
   static_tests:
@@ -155,11 +139,14 @@ jobs:
   # Job used to deploy to a remote environment.
   #
   # This could be as simple as pushing the artifact to a remote git repo or as
-  # complicated as building a remote environment to push to.
+  # complicated as building a remote environment to push to. This job will not
+  # be run if the host-variant parameter is set to "pantheon"
   deploy:
     <<: *defaults
+
     steps:
       - restore-project
+          drupal-root: << pipeline.parameters.docroot >>
       - run:
           name: Deploy the code
           command: |
@@ -168,6 +155,56 @@ jobs:
             else
               ./vendor/fourkitchens/project_ci/scripts/deploy
             fi
+
+  # Job used to deploy to pantheon.
+  #
+  # This job is special because pantheon employs a special docker container and
+  # the use of terminus with build tools which expect a very specific
+  # environment configuration. To enable this job, set the host-variant
+  # parameter to "pantheon".
+  deploy_to_pantheon:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      NOTIFY: 'scripts/github/add-commit-comment {project} {sha} "Created multidev environment [{site}#{env}]({dashboard-url})." {site-url}'
+      TERM: dumb
+      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
+    steps:
+      - checkout
+      - restore-project
+          drupal-root: << pipeline.parameters.docroot >>
+      - run:
+          name: Upgrade composer
+          command: composer self-update
+
+      - run:
+          # Set TERMINUS_ENV and related environment variables.
+          # https://github.com/pantheon-systems/docker-build-tools-ci/blob/6.x/scripts/set-environment
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/project_ci/scripts/ntheon/set-environment
+            fi
+      # Rsync the build artifact pieces web directory
+      - run:
+          name: sync build artifact
+          command: rsync -rz /tmp/web /tmp/vendor /tmp/drush .
+
+      # Deploy to Pantheon
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy" ]; then
+              ./.circleci/scripts/deploy
+            else
+              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy
+          no_output_timeout: 30m
 
   # Run this on one of the main branches to push a release back to github.
   #
@@ -185,7 +222,6 @@ jobs:
             else
               ./vendor/fourkitchens/project_ci/scripts/release
             fi
-
 workflows:
   version: 2
   build-deploy:
@@ -193,6 +229,10 @@ workflows:
       - static_tests
       - build
       - deploy:
+          when:
+            condition:
+              not:
+                equal: [ pantheon, << pipeline.parameters.host-variant >> ]
           requires:
             - static_tests
             - build
@@ -203,6 +243,15 @@ workflows:
                 - master
                 - develop
                 - /release-.*/
+      # This is doesn't set the branch restraints because multidevs can be
+      # created using any branch.
+      - deploy_to_pantheon:
+          when:
+            condition:
+              equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+          requires:
+            - static_tests
+            - build
       - release:
           requires:
           - deploy
@@ -211,3 +260,95 @@ workflows:
               only:
                 - 'main'
                 - 'master'
+
+###### Please do not change things in the commands without contributing back.
+orbs:
+  node: circleci/node@4.1.0
+  php: circleci/php@1.1.0
+commands:
+  install-node-from-nvmrc:
+    description: Workaround for installing node on projects with .nvmrc files.
+    steps:
+      # Work around for node install issue. This happens because nvm checks
+      # to see if the version of node in the .nvmrc exists before it does
+      # anything else. Therefore, we have to remove the .nvmrc file before we
+      # install nvm, and then put it back. Afterwards, we set the version of
+      # node in the .nvmrc file as the default.
+      # see: https://github.com/CircleCI-Public/node-orb/issues/65
+      - run: rm .nvmrc
+      - node/install
+      - run: git checkout .nvmrc
+      - run: nvm install; nvm alias default `cat .nvmrc`
+      - run: node --version
+  install-project-dependency-managers:
+    description: setup composer and npm.
+    steps:
+      # Most projects require both composer and npm to be installed to do
+      # anything.
+      - php/install-composer
+      - install-node-from-nvmrc
+  install-project-dependencies:
+    description: install both npm and composer dependencies
+    steps:
+      - php/install-packages
+      # Lets install the node packages as they are defined by the lock file
+      # in the project.
+      - node/install-packages:
+          cache-path: ~/app/node_modules
+          override-ci-command: npm ci
+  setup-project:
+    description: setup php and node and download all dependencies for the project.
+    steps:
+      - checkout
+      - install-project-dependency-managers
+      - install-project-dependencies
+      - run:
+          name: Set up environment variables
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            elif [ -f "./vendor/fourkitchens/project_ci/set-environment" ]; then
+              ./vendor/fourkitchens/project_ci/set-environment
+            fi
+  save-project:
+    description: Persist the Drupal project so other jobs can use it.
+    parameters:
+      drupal_root:
+        description: "Where composer installs drupal."
+        # Change the value here or add a parameter to where this is called.
+        default: "docroot"
+        type: string
+    steps:
+      - persist_to_workspace:
+          root: .
+          paths:
+            # Change this
+            - << parameters.drupal_root >>
+            - vendor
+            - drush
+  restore-project:
+    description: Restore a Drupal project that was persisted from another job.
+    parameters:
+      drupal_root:
+        description: "Where composer installs drupal."
+        # Change the value here or add a parameter to where this is called.
+        default: "docroot"
+        type: string
+      other_directories:
+        description: "Other directories relative to the root of the project that need to be restored to complete the project. Be sure to add /tmp to your directory. Example if you need the node_modules folder synced, add /tmp/node_modules."
+        # Change the value here or add a parameter to where this is called.
+        default: "/tmp/vendor /tmp/drush"
+        type: string
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp
+      # Rsync the build artifact pieces al
+      - run:
+          name: sync build artifact
+          command: |
+            sudo apt-get update -y
+            sudo apt-get -y install rsync
+            rsync -lrz /tmp/<< parameters.drupal_root >> << parameters.other_directories >> .
+
+##### Feel free to alter the tasks below to point to your own tasks.
