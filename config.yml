@@ -19,10 +19,10 @@ parameters:
   host-variant:
     description: A string representing a site's host. EX acquia, pantheon
     type: string
-    default: "acquia"
+    default: "pantheon"
   docroot:
     description: "Where composer installs drupal."
-    default: "docroot"
+    default: "web"
     type: string
 
 env: &env
@@ -44,6 +44,12 @@ env: &env
   # Acquia git repo url.
   #
   # ACQUIA_REPO: sitename@svn-21939.prod.hosting.acquia.com:sitename.git
+
+  # Cloud API Realm. Usually "prod" or "devcloud".
+  #
+  # See: https://docs.acquia.com/acquia-cloud/api#realm
+  #
+  # ACQUIA_REALM: prod
 
   ############################
   # PANTHEON SPECIFIC SETTINGS
@@ -91,7 +97,7 @@ defaults: &defaults
   executor:
     name: php/default
     tag: << pipeline.parameters.php-version >>
-  working_directory: ~/app
+  working_directory: ~/project
   environment:
     <<: *env
 
@@ -145,8 +151,8 @@ jobs:
     <<: *defaults
 
     steps:
-      - restore-project
-          drupal-root: << pipeline.parameters.docroot >>
+      - restore-project:
+          drupal_root: << pipeline.parameters.docroot >>
       - run:
           name: Deploy the code
           command: |
@@ -175,8 +181,8 @@ jobs:
       # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
       - checkout
-      - restore-project
-          drupal-root: << pipeline.parameters.docroot >>
+      - restore-project:
+          drupal_root: << pipeline.parameters.docroot >>
       - run:
           name: Upgrade composer
           command: composer self-update
@@ -224,15 +230,36 @@ jobs:
             fi
 workflows:
   version: 2
-  build-deploy:
+  build-deploy-pantheon:
+    when:
+      condition:
+        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+    jobs:
+      - static_tests
+      - build
+      # This is doesn't set the branch restraints because multidevs can be
+      # created using any branch.
+      - deploy_to_pantheon:
+          requires:
+            - static_tests
+            - build
+      - release:
+          requires:
+          - deploy_to_pantheon
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+  build-deploy-acquia:
+    when:
+      condition:
+        not:
+          equal: [ pantheon, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
       - deploy:
-          when:
-            condition:
-              not:
-                equal: [ pantheon, << pipeline.parameters.host-variant >> ]
           requires:
             - static_tests
             - build
@@ -243,15 +270,6 @@ workflows:
                 - master
                 - develop
                 - /release-.*/
-      # This is doesn't set the branch restraints because multidevs can be
-      # created using any branch.
-      - deploy_to_pantheon:
-          when:
-            condition:
-              equal: [ pantheon, << pipeline.parameters.host-variant >> ]
-          requires:
-            - static_tests
-            - build
       - release:
           requires:
           - deploy
@@ -275,10 +293,11 @@ commands:
       # install nvm, and then put it back. Afterwards, we set the version of
       # node in the .nvmrc file as the default.
       # see: https://github.com/CircleCI-Public/node-orb/issues/65
-      - run: rm .nvmrc
+      - run: "if [ -f \".nvmrc\" ]; then rm .nvmrc; fi"
       - node/install
-      - run: git checkout .nvmrc
-      - run: nvm install; nvm alias default `cat .nvmrc`
+      - run: "if git status --short | grep .nvmrc; then git checkout .nvmrc; else echo \"stable\" > .nvmrc; fi"
+      - run: nvm install
+      - run: nvm alias default `cat .nvmrc`
       - run: node --version
   install-project-dependency-managers:
     description: setup composer and npm.
@@ -294,7 +313,7 @@ commands:
       # Lets install the node packages as they are defined by the lock file
       # in the project.
       - node/install-packages:
-          cache-path: ~/app/node_modules
+          cache-path: ~/project/node_modules
           override-ci-command: npm ci
   setup-project:
     description: setup php and node and download all dependencies for the project.
