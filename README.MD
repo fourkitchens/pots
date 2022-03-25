@@ -11,6 +11,7 @@ run out of the box:
 - phpcs.xml or phpcs.xml.dist
 - package.json preferably with a .nvmrc
 - several scripts in composer.json
+- .gitignore files with cut lines in them to distinguish source from artifact.
 
 Set up of the Circle tasks assumes you are doing this with a bot user. Please
 ensure that the bot user you are using has account on both the github
