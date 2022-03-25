@@ -24,6 +24,20 @@ parameters:
     description: "Where composer installs drupal."
     default: "web"
     type: string
+  artifact_workspace:
+    description: "Where the build stores the built artifact temporarly."
+    default: "/tmp/build"
+    type: string
+
+# These are the directories that will be saved between builds and deploys.
+# Change these if the list below needs different folders. Directory names are
+# relative to the project root.
+persisting_dirs: &persisting_dirs
+  - << pipeline.parameters.docroot >>
+  - vendor
+  - drush
+# - node_modules
+
 
 env: &env
   #########################
@@ -81,9 +95,28 @@ env: &env
   # For Pantheon: dev, test, live
   #
   # Default: "prod" on Acquia. "live" on Pantheon
+  #
   # CANONICAL_ENV: dev
+
+  # Script used to sanatize databases. Only used when CANONICAL_ENV is not dev.
+  #
+  # Default: empty
   #
   # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
+
+  # Build CI multidevs on every commit on Pantheon
+  #
+  # Possible Values: YES, NO
+  #
+  # Default: NO
+  #
+  # CI_BUILD: YES
+
+  # Define the main branch releases are cut from.
+  #
+  # Default: main
+  #
+  # DEFAULT_BRANCH: master
 
   ###########################
   # STUFF THAT DOESN'T CHANGE
@@ -140,7 +173,9 @@ jobs:
             else
               ./vendor/fourkitchens/project_ci/scripts/build/theme
             fi
-      - save-project
+      - persist_to_workspace:
+          root: .
+          paths: *persisting_dirs
 
   # Job used to deploy to a remote environment.
   #
@@ -152,7 +187,7 @@ jobs:
 
     steps:
       - restore-project:
-          drupal_root: << pipeline.parameters.docroot >>
+          workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
           name: Deploy the code
           command: |
@@ -172,7 +207,7 @@ jobs:
     <<: *defaults
     docker:
       # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-<< pipeline.parameters.php-version >>
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -182,27 +217,18 @@ jobs:
     steps:
       - checkout
       - restore-project:
-          drupal_root: << pipeline.parameters.docroot >>
+          workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
           name: Upgrade composer
           command: composer self-update
-
       - run:
-          # Set TERMINUS_ENV and related environment variables.
-          # https://github.com/pantheon-systems/docker-build-tools-ci/blob/6.x/scripts/set-environment
           name: setup-environment-vars
           command: |
             if [ -f "./.circleci/scripts/set-environment" ]; then
               ./.circleci/scripts/set-environment
             else
-              ./vendor/fourkitchens/project_ci/scripts/ntheon/set-environment
+              ./vendor/fourkitchens/project_ci/scripts/set-environment
             fi
-      # Rsync the build artifact pieces web directory
-      - run:
-          name: sync build artifact
-          command: rsync -rz /tmp/web /tmp/vendor /tmp/drush .
-
-      # Deploy to Pantheon
       - run:
           name: deploy to Pantheon
           command: |
@@ -210,6 +236,7 @@ jobs:
               ./.circleci/scripts/deploy
             else
               ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy
+            fi
           no_output_timeout: 30m
 
   # Run this on one of the main branches to push a release back to github.
@@ -228,12 +255,12 @@ jobs:
             else
               ./vendor/fourkitchens/project_ci/scripts/release
             fi
+
 workflows:
   version: 2
   build-deploy-pantheon:
     when:
-      condition:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      equal: [ pantheon, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -253,9 +280,8 @@ workflows:
                 - 'master'
   build-deploy-acquia:
     when:
-      condition:
-        not:
-          equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      not:
+        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -329,45 +355,26 @@ commands:
             elif [ -f "./vendor/fourkitchens/project_ci/set-environment" ]; then
               ./vendor/fourkitchens/project_ci/set-environment
             fi
-  save-project:
-    description: Persist the Drupal project so other jobs can use it.
-    parameters:
-      drupal_root:
-        description: "Where composer installs drupal."
-        # Change the value here or add a parameter to where this is called.
-        default: "docroot"
-        type: string
-    steps:
-      - persist_to_workspace:
-          root: .
-          paths:
-            # Change this
-            - << parameters.drupal_root >>
-            - vendor
-            - drush
   restore-project:
     description: Restore a Drupal project that was persisted from another job.
     parameters:
-      drupal_root:
-        description: "Where composer installs drupal."
-        # Change the value here or add a parameter to where this is called.
-        default: "docroot"
-        type: string
-      other_directories:
-        description: "Other directories relative to the root of the project that need to be restored to complete the project. Be sure to add /tmp to your directory. Example if you need the node_modules folder synced, add /tmp/node_modules."
-        # Change the value here or add a parameter to where this is called.
-        default: "/tmp/vendor /tmp/drush"
+      workspace_root:
+        description: "Where to copy the workspace to"
+        default: "/tmp/build"
         type: string
     steps:
       - checkout
       - attach_workspace:
-          at: /tmp
-      # Rsync the build artifact pieces al
+          at: << parameters.workspace_root >>
+      # Rsync the build artifact pieces back into the project.
       - run:
           name: sync build artifact
           command: |
-            sudo apt-get update -y
-            sudo apt-get -y install rsync
-            rsync -lrz /tmp/<< parameters.drupal_root >> << parameters.other_directories >> .
+            if ! command -v rsync &> /dev/null
+            then
+              sudo apt-get update -y
+              sudo apt-get -y install rsync
+            fi
+            rsync -lrz << parameters.workspace_root >>/* .
 
 ##### Feel free to alter the tasks below to point to your own tasks.
