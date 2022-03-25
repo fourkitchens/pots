@@ -104,7 +104,13 @@ env: &env
   #
   # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
 
-  # Build CI multidevs on every commit on Pantheon
+  #####################################
+  # OPTIONAL CONFIGURATION FOR PANTHEON
+  #####################################
+
+  # Build CI multidevs on every commit on Pantheon. This way you get the ci-*
+  # environments. This may be useful for visual regression testing or workflows
+  # without PRs.
   #
   # Possible Values: YES, NO
   #
@@ -114,9 +120,41 @@ env: &env
 
   # Define the main branch releases are cut from.
   #
-  # Default: main
+  # Default: "main" if the branch it exists, "master" otherwise.
   #
-  # DEFAULT_BRANCH: master
+  # MAIN_BRANCH: master
+
+  # Define the development branch where active development happens on github.
+  # This branch is used most in gitflow development patterns.
+  #
+  # Default: develop
+  #
+  # DEVELOPMENT_BRANCH: dev
+
+  # Re-sync content for multidevs every time a push is made to Pantheon.
+  #
+  # Possible Values: NO, YES
+  #
+  # Default: NO
+  #
+  # REBUILD_MULTIDEV_ENV_EVERY_PUSH: YES
+
+  # Re-sync content for the Github development multidev every time a push is
+  # made to Pantheon.
+  #
+  # Possible Values: NO, YES
+  #
+  # Default: NO
+  #
+  # REBUILD_DEVELOPMENT_ENV_EVERY_PUSH: YES
+
+  # Define the name of the multidev used for the Github development branch. Must
+  # follow the multidev naming conventions for Pantheon.
+  #
+  # Default: github-dev
+  #
+  # DEVELOPMENT_ENV: circleci
+
 
   ###########################
   # STUFF THAT DOESN'T CHANGE
