@@ -123,7 +123,7 @@ fi
 ) >> $BASH_ENV
 
 # If a Terminus machine token and site name are defined
-if [[ hash terminus 2>/dev/null && -n "$TERMINUS_MACHINE_TOKEN" && -n "$TERMINUS_SITE" ]]
+if hash terminus 2>/dev/null && [[ -n "$TERMINUS_MACHINE_TOKEN" && -n "$TERMINUS_SITE" ]]
 then
 
   # Authenticate with Terminus
@@ -148,7 +148,7 @@ echo
 mkdir -p $HOME/.ssh && echo "StrictHostKeyChecking no" >> "$HOME/.ssh/config"
 
 # Configure the GitHub Oauth token if it is available
-if [[ hash composer 2>/dev/null && -n "$GITHUB_TOKEN" ]]; then
+if hash composer 2>/dev/null && [[ -n "$GITHUB_TOKEN" ]]; then
   composer -n config --global github-oauth.github.com $GITHUB_TOKEN
 fi
 
