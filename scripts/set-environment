@@ -1,6 +1,17 @@
 #!/bin/bash
 set -eo pipefail
 
+function is_in_remote() {
+    local branch=${1}
+    local existed_in_remote=$(git ls-remote --heads origin ${branch})
+
+    if [[ -z ${existed_in_remote} ]]; then
+        echo 0
+    else
+        echo 1
+    fi
+}
+
 #
 # Before calling this script, set the following environent variables:
 #
@@ -39,7 +50,7 @@ DEFAULT_SITE=${DEFAULT_SITE:-$SITE_NAME}
 
 DEFAULT_ENV=ci-$CI_BUILD_NUMBER
 
-MAIN_BRANCH="main"
+MAIN_BRANCH=${MAIN_BRANCH:-"master"}
 DEVELOPMENT_BRANCH="develop"
 DEVELOPMENT_ENV="github-dev"
 
@@ -157,6 +168,11 @@ git config --global user.email "${GIT_EMAIL:-no-reply+ci-$CI_BUILD_NUMBER@getpan
 git config --global user.name "CI Bot"
 git config --global core.fileMode false
 
+# If the main branch exists, lets override the default of master for main.
+if is_in_remote "main" && [[ "$MAIN_BRANCH" == "master" ]]
+then
+  MAIN_BRANCH="main"
+fi
 # Re-install the Terminus Build Tools plugin if requested
 if [ -n $BUILD_TOOLS_VERSION ] && [ "$BUILD_TOOLS_VERSION" <> 'dev-master' ]; then
   echo "Install Terminus Build Tools Plugin version $BUILD_TOOLS_VERSION."
