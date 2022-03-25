@@ -30,7 +30,7 @@ function is_in_remote() {
 #
 CI_BRANCH=${CI_BRANCH:-$CIRCLE_BRANCH}
 CI_BUILD_NUMBER=${CI_BUILD_NUMBER:-$CIRCLE_BUILD_NUM}
-CI_PROJECT_NAME=${CI_PROJECT_NAME:-CIRCLE_PROJECT_REPONAME}
+CI_PROJECT_NAME=${CI_PROJECT_NAME:-$CIRCLE_PROJECT_REPONAME}
 CI_BUILD=${CI_BUILD:-NO}
 
 # Circle sets both $CIRCLE_PULL_REQUEST and $CI_PULL_REQUEST.
@@ -54,12 +54,23 @@ MAIN_BRANCH=${MAIN_BRANCH:-"master"}
 DEVELOPMENT_BRANCH="develop"
 DEVELOPMENT_ENV="github-dev"
 
+# Set up our default git config settings if git is available.
+git config --global user.email "${GIT_EMAIL:-no-reply+ci-$CI_BUILD_NUMBER@getpantheon.com}"
+git config --global user.name "CI Bot"
+git config --global core.fileMode false
+
+# If the main branch exists, lets override the default of master for main.
+if is_in_remote "main" && [[ "$MAIN_BRANCH" == "master" ]]
+then
+  MAIN_BRANCH="main"
+fi
+
 # If there is a PR number provided, though, then we will use it instead.
 if [[ -n ${PR_NUMBER} ]] ; then
   DEFAULT_ENV="pr-${PR_NUMBER}"
 fi
 # If we are on the default branch.
-if [[ ${CI_BRANCH} == "${DEFAULT_BRANCH}" ]] ; then
+if [[ ${CI_BRANCH} == "${MAIN_BRANCH}" ]] ; then
   # Use test as the environment.
 	DEFAULT_ENV=dev
 fi
@@ -95,6 +106,7 @@ if [[ ${HOST_VARIANT} == "pantheon" ]] ; then
 elif [[ ${HOST_VARIANT} == "acquia" ]] ; then
   CANONICAL_ENV=${CANONICAL_ENV:-prod}
 fi
+
 
 #=====================================================================================================================
 # EXPORT needed environment variables
@@ -163,16 +175,6 @@ if hash composer 2>/dev/null && [[ -n "$GITHUB_TOKEN" ]]; then
   composer -n config --global github-oauth.github.com $GITHUB_TOKEN
 fi
 
-# Set up our default git config settings if git is available.
-git config --global user.email "${GIT_EMAIL:-no-reply+ci-$CI_BUILD_NUMBER@getpantheon.com}"
-git config --global user.name "CI Bot"
-git config --global core.fileMode false
-
-# If the main branch exists, lets override the default of master for main.
-if is_in_remote "main" && [[ "$MAIN_BRANCH" == "master" ]]
-then
-  MAIN_BRANCH="main"
-fi
 # Re-install the Terminus Build Tools plugin if requested
 if [ -n $BUILD_TOOLS_VERSION ] && [ "$BUILD_TOOLS_VERSION" <> 'dev-master' ]; then
   echo "Install Terminus Build Tools Plugin version $BUILD_TOOLS_VERSION."
