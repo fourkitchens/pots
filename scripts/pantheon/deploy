@@ -26,10 +26,11 @@ terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true
 # Prepare for Pantheon
 composer -n run prepare-for-pantheon
 
-if [[ $CI_BRANCH == $MAIN_BRANCH ]]
+echo "Building from $CI_BRANCH."
+if [[ "$CI_BRANCH" == "$MAIN_BRANCH" ]]
 then
   echo "Building the Dev environment."
-  if [[ $CANONICAL_ENV != 'dev' ]]
+  if [[ "$CANONICAL_ENV" != "dev" ]]
   then
     terminus -n env:clone-content "$TERMINUS_SITE.$CANONICAL_ENV" dev
     if [[ ! -z "$SANATIZE_SCRIPT" ]]
