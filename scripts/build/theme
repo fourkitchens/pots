@@ -17,4 +17,7 @@ npm run theme-build
 # Finds and truncates all the theme .gitignores so we can make an artifact
 # build. If the string blow isn't found, the entire .gitignore will be removed
 # allowing everything to be committed to the hosting repository.
-find ./$DOCROOT/themes/custom -type f -name '.gitignore' | xargs sed -i '1,/# :::::::::::::::::::::: cut ::::::::::::::::::::::/d'
+if [ -d "./$DOCROOT/themes/custom" ] && [[ ! -z find ./$DOCROOT/themes/custom -maxdepth 2 -type f -name '.gitignore' ]]
+then
+  find ./$DOCROOT/themes/custom -maxdepth 2 -type f -name '.gitignore' | xargs sed -i '1,/# :::::::::::::::::::::: cut ::::::::::::::::::::::/d'
+fi
