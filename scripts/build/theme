@@ -7,7 +7,7 @@ set -eo pipefail
 #
 
 # Use docroot as the drupal web root.
-DOCROOT=${$DOCROOT:-docroot}
+DOCROOT=${DOCROOT:-docroot}
 
 
 echo "Compiling theme..."
