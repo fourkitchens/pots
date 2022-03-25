@@ -9,9 +9,12 @@ set -eo pipefail
 # Use docroot as the drupal web root.
 DOCROOT=${DOCROOT:-docroot}
 
-
 echo "Compiling theme..."
 
 # Compile theme files and pattern lab.
 npm run theme-build
-rm ./$DOCROOT/themes/custom/*/.gitignore
+
+# Finds and truncates all the theme .gitignores so we can make an artifact
+# build. If the string blow isn't found, the entire .gitignore will be removed
+# allowing everything to be committed to the hosting repository.
+find ./$DOCROOT/themes/custom -type f -name '.gitignore' | xargs sed -i '1,/### HOSTING WILL IGNORE FILES BELOW THIS LINE ###/d'
