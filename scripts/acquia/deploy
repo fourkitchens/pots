@@ -10,8 +10,7 @@ git config --global user.name "$ACQUIA_BOT_NAME"
 git remote add acquia $ACQUIA_REPO
 ssh-keyscan -H $(echo "$ACQUIA_REPO" | sed 's/.*@\(.*\):.*/\1/') >> ~/.ssh/known_hosts
 git fetch acquia
-# "sed -i '1,/######## ACQUIA IGNORE BELOW THIS LINE ########/d' .gitignore"
-mv -f ./.gitignore-acquia ./.gitignore
+sed -i '1,/# :::::::::::::::::::::: cut ::::::::::::::::::::::/d' .gitignore
 # remove any .git directories that may exist in vendor libraries* so those
 # libraries don't get excluded from our repo. Remember kiddies somedir/*
 # returns all files/dirs that are NOT dot (hidden). This protects our repos'
