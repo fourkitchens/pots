@@ -53,6 +53,8 @@ DEFAULT_ENV=ci-$CI_BUILD_NUMBER
 MAIN_BRANCH=${MAIN_BRANCH:-"master"}
 DEVELOPMENT_BRANCH="develop"
 DEVELOPMENT_ENV="github-dev"
+REBUILD_DEVELOPMENT_ENV_EVERY_PUSH="NO"
+REBUILD_MULTIDEV_ENV_EVERY_PUSH="NO"
 
 # Set up our default git config settings if git is available.
 git config --global user.email "${GIT_EMAIL:-no-reply+ci-$CI_BUILD_NUMBER@getpantheon.com}"
@@ -136,6 +138,8 @@ fi
   echo "export MAIN_BRANCH=$MAIN_BRANCH"
   echo "export DEVELOPMENT_BRANCH=$DEVELOPMENT_BRANCH"
   echo "export DEVELOPMENT_ENV=$DEVELOPMENT_BRANCH"
+  echo "export REBUILD_DEVELOPMENT_ENV_EVERY_PUSH=$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH"
+  echo "export REBUILD_MULTIDEV_ENV_EVERY_PUSH=$REBUILD_MULTIDEV_ENV_EVERY_PUSH"
   # TODO: Reconcile with environment variables set by build:project:create
   echo 'export BEHAT_ADMIN_PASSWORD=$(openssl rand -base64 24)'
   echo 'export BEHAT_ADMIN_USERNAME=pantheon-ci-testing-$CI_BUILD_NUMBER'

@@ -45,12 +45,28 @@ then
 else
   # Create a new multidev environment (or push to an existing one)
   echo "Building Multidev $TERMINUS_ENV from $CANONICAL_ENV"
-  terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes
-  if [[ ! -z "$SANATIZE_SCRIPT" ]]
+  if [[ "$TERMINUS_ENV" != "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_MULTIDEV_ENV_EVERY_PUSH" == "YES" ]]
   then
-    echo "Sanatizing Database."
-    # If we've set a sanatization script for the database, run it.
-    $( $SANATIZE_SCRIPT )
+    echo "This project is set to clone content for multidevs every push."
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes --clone-content
+    if [[ ! -z "$SANATIZE_SCRIPT" ]]
+    then
+      echo "Sanatizing Database."
+      # If we've set a sanatization script for the database, run it.
+      $( $SANATIZE_SCRIPT )
+    fi
+  elif [[ "$TERMINUS_ENV" == "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH" == "YES" ]]
+  then
+    echo "This project is set to clone content for the github development multidev every push."
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes --clone-content
+    if [[ ! -z "$SANATIZE_SCRIPT" ]]
+    then
+      echo "Sanatizing Database."
+      # If we've set a sanatization script for the database, run it.
+      $( $SANATIZE_SCRIPT )
+    fi
+  else
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes
   fi
 fi
 
