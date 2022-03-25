@@ -27,6 +27,7 @@ terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true
 composer -n run prepare-for-pantheon
 
 echo "Building from $CI_BRANCH."
+echo "The Main Branch is $MAIN_BRANCH."
 if [[ "$CI_BRANCH" == "$MAIN_BRANCH" ]]
 then
   echo "Building the Dev environment."
