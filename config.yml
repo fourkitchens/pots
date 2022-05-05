@@ -22,7 +22,7 @@ parameters:
     default: "pantheon"
   docroot:
     description: "Where composer installs drupal."
-    default: "web"
+    default: "."
     type: string
   artifact_workspace:
     description: "Where the build stores the built artifact temporarly."
@@ -34,9 +34,6 @@ parameters:
 # relative to the project root.
 persisting_dirs: &persisting_dirs
   - << pipeline.parameters.docroot >>
-  - vendor
-  - drush
-# - node_modules
 
 
 env: &env
@@ -102,7 +99,7 @@ env: &env
   #
   # Default: empty
   #
-  # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
+  # SANATIZE_SCRIPT: ./vendor/ensembleiq/project_ci/scripts/sanatize-db
 
   #####################################
   # OPTIONAL CONFIGURATION FOR PANTHEON
@@ -146,14 +143,14 @@ env: &env
   #
   # Default: NO
   #
-  # REBUILD_DEVELOPMENT_ENV_EVERY_PUSH: YES
+  REBUILD_DEVELOPMENT_ENV_EVERY_PUSH: YES
 
   # Define the name of the multidev used for the Github development branch. Must
   # follow the multidev naming conventions for Pantheon.
   #
   # Default: github-dev
   #
-  # DEVELOPMENT_ENV: circleci
+  DEVELOPMENT_ENV: circleci
 
 
   ###########################
@@ -184,7 +181,7 @@ jobs:
             if [ -f "./.circleci/scripts/test/static" ]; then
               ./.circleci/scripts/test/static
             else
-              ./vendor/fourkitchens/project_ci/scripts/test/static
+              ./vendor/ensembleiq/project_ci/scripts/test/static
             fi
 
   # Job used to create what will be committed to the Artifact.
@@ -201,7 +198,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/php" ]; then
               ./.circleci/scripts/build/build/php
             else
-              ./vendor/fourkitchens/project_ci/scripts/build/php
+              ./vendor/ensembleiq/project_ci/scripts/build/php
             fi
       - run:
           name: run theme build step
@@ -209,7 +206,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/theme" ]; then
               ./.circleci/scripts/build/theme
             else
-              ./vendor/fourkitchens/project_ci/scripts/build/theme
+              ./vendor/ensembleiq/project_ci/scripts/build/theme
             fi
       - persist_to_workspace:
           root: .
@@ -232,7 +229,7 @@ jobs:
             if [ -f "./.circleci/scripts/deploy" ]; then
               ./.circleci/scripts/deploy
             else
-              ./vendor/fourkitchens/project_ci/scripts/deploy
+              ./vendor/ensembleiq/project_ci/scripts/deploy
             fi
 
   # Job used to deploy to pantheon.
@@ -265,7 +262,7 @@ jobs:
             if [ -f "./.circleci/scripts/set-environment" ]; then
               ./.circleci/scripts/set-environment
             else
-              ./vendor/fourkitchens/project_ci/scripts/set-environment
+              ./vendor/ensembleiq/project_ci/scripts/set-environment
             fi
       - run:
           name: deploy to Pantheon
@@ -273,7 +270,7 @@ jobs:
             if [ -f "./.circleci/scripts/deploy" ]; then
               ./.circleci/scripts/deploy
             else
-              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy
+              ./vendor/ensembleiq/project_ci/scripts/pantheon/deploy
             fi
           no_output_timeout: 30m
 
@@ -291,14 +288,38 @@ jobs:
             if [ -f "./.circleci/scripts/release" ]; then
               ./.circleci/scripts/release
             else
-              ./vendor/fourkitchens/project_ci/scripts/release
+              ./vendor/ensembleiq/project_ci/scripts/release
+            fi
+
+  s3_database_backup:
+    <<: *defaults
+    docker:
+      - image: quay.io/pantheon-public/build-tools-ci:6.x
+        user: root
+    executor: aws-cli/default
+    steps:
+      - checkout
+      - aws-cli/setup
+      - run:
+          name: Backup the Database on S3
+          command: |
+            if [ -f "./.circleci/scripts/db-backup" ]; then
+              ./.circleci/scripts/db-backup
+            else
+              ./vendor/ensembleiq/project_ci/scripts/db-backup
+            fi
+      - run:
+          name: Backup Files on S3
+          command: |
+            if [ -f "./.circleci/scripts/files-backup" ]; then
+              ./.circleci/scripts/files-backup
+            else
+              ./vendor/ensembleiq/project_ci/scripts/files-backup
             fi
 
 workflows:
   version: 2
   build-deploy-pantheon:
-    when:
-      equal: [ pantheon, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -308,45 +329,24 @@ workflows:
           requires:
             - static_tests
             - build
-      - release:
-          requires:
-          - deploy_to_pantheon
-          filters:
-            branches:
+  scheduled_backup:
+    triggers:
+       - schedule:
+           cron: "0 1 * * *"
+           filters:
+             branches:
               only:
-                - 'main'
-                - 'master'
-  build-deploy-acquia:
-    when:
-      not:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
-    jobs:
-      - static_tests
-      - build
-      - deploy:
-          requires:
-            - static_tests
-            - build
-          filters:
-            branches:
-              only:
-                - main
                 - master
-                - develop
-                - /release-.*/
-      - release:
-          requires:
-          - deploy
-          filters:
-            branches:
-              only:
-                - 'main'
-                - 'master'
+    jobs:
+      - s3_database_backup:
+          context:
+            - aws
 
 ###### Please do not change things in the commands without contributing back.
 orbs:
   node: circleci/node@4.1.0
   php: circleci/php@1.1.0
+  aws-cli: circleci/aws-cli@2.0.3
 commands:
   install-node-from-nvmrc:
     description: Workaround for installing node on projects with .nvmrc files.
@@ -390,8 +390,8 @@ commands:
           command: |
             if [ -f "./.circleci/scripts/set-environment" ]; then
               ./.circleci/scripts/set-environment
-            elif [ -f "./vendor/fourkitchens/project_ci/set-environment" ]; then
-              ./vendor/fourkitchens/project_ci/set-environment
+            elif [ -f "./vendor/ensembleiq/project_ci/set-environment" ]; then
+              ./vendor/ensembleiq/project_ci/set-environment
             fi
   restore-project:
     description: Restore a Drupal project that was persisted from another job.

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -eo pipefail
+# Authenticate with Terminus
+terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+FILENAME="`terminus backup:list $TERMINUS_SITE.live --element=db --field=Filename | head -1`";
+terminus backup:get $TERMINUS_SITE.live --element=db --to="$FILENAME"
+aws s3 cp "$FILENAME" "s3://eiqpantheonbackups/$TERMINUS_SITE/$FILENAME"

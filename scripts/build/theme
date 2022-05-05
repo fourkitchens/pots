@@ -6,18 +6,18 @@ set -eo pipefail
 # This script performs all tasks related to the site theme.
 #
 
-# Use docroot as the drupal web root.
-DOCROOT=${DOCROOT:-docroot}
+echo "Compiling other themes..."
 
-echo "Compiling theme..."
+# Take care of the non-emulsify theme.
+pushd ./themes/custom/ashday_foundation
+npm ci
+popd
+./node_modules/.bin/gulp compile_sass -S
 
-# Compile theme files and pattern lab.
-npm run theme-build
+echo "Compiling Emulsify..."
+# Compile emulsify.
+pushd ./themes/custom/ensemble
+npm ci
+npm run build
+popd
 
-# Finds and truncates all the theme .gitignores so we can make an artifact
-# build. If the string blow isn't found, the entire .gitignore will be removed
-# allowing everything to be committed to the hosting repository.
-if [ -d "./$DOCROOT/themes/custom" ] && [[ ! -z $( find ./$DOCROOT/themes/custom -maxdepth 2 -type f -name '.gitignore' ) ]]
-then
-  find ./$DOCROOT/themes/custom -maxdepth 2 -type f -name '.gitignore' | xargs sed -i '1,/# :::::::::::::::::::::: cut ::::::::::::::::::::::/d'
-fi
