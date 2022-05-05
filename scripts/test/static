@@ -3,7 +3,7 @@
 set -eo pipefail
 
 # Lint php code for syntax errors
-composer -n lint
+find modules/custom themes/custom -name "*.php" '!' -path '*/node_modules/*' -print0 | xargs -0 -n1 -P8 php -l
 
 # Check coding standards
-composer -n code-sniff
+#./vendor/bin/phpcs
