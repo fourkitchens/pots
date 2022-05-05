@@ -1,6 +1,6 @@
 {
-    "name": "fourkitchens/project_ci",
-    "description": "Scripts to help aid in deployment for sites.",
+    "name": "ensembleiq/project_ci",
+    "description": "Fork of fourkitchens/project_ci. Scripts to help aid in deployment for sites.",
     "authors": [
         {
             "name": "Allan Chappell",
