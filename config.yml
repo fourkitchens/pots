@@ -250,7 +250,6 @@ jobs:
       TERM: dumb
       # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
-      - checkout
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
