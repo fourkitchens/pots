@@ -20,5 +20,5 @@ find ./* -type d | grep .git | xargs rm -rf
 # Commit and push to a "deploy" branch.
 git add .
 git commit -am "Built assets."
-git push origin $CIRCLE_BRANCH-deploy -f --tags
+git push origin $CIRCLE_BRANCH:$CIRCLE_BRANCH-deploy -f --tags
 echo "If deployment was successful, an artifact should be availible in the origin repo at $CIRCLE_BRANCH-deploy".
