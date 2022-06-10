@@ -21,9 +21,11 @@ fi
 
 # Delete old multidev environments associated
 # with a PR that has been merged or closed.
-terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true
+echo "Deleting old Multidevs for Closed PRs. Sending to Background."
+( terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true ) &
 
 # Prepare for Pantheon
+echo "Preparing Artifact for Pantheon."
 composer -n run prepare-for-pantheon
 
 echo "Building from $CI_BRANCH."
@@ -70,6 +72,7 @@ else
   fi
 fi
 
+echo "Starting environment deploy commmands."
 # Update the Drupal database
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- updatedb -y
 
@@ -81,8 +84,11 @@ fi
 # Clear Drupal cache
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- cr
 
+echo "Clearing the Edge cache."
 # Clear the environment cache
 terminus -n env:clear-cache $TERMINUS_SITE.$TERMINUS_ENV
 
 # Ensure secrets are set
 terminus -n secrets:set "$TERMINUS_SITE.$TERMINUS_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+
+echo "Done deploying. Your environment is ready for your review."
