@@ -2,6 +2,18 @@
 
 set -eo pipefail
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+if [[ -z "$BACKUP_SCRIPT_PATH" ]]; then
+  BACKUP_SCRIPT_PATH="$SCRIPT_DIR/backup"
+fi
+if [[ -z "$REMOTE_BACKUP_DIRECTORY" ]]; then
+  REMOTE_BACKUP_DIRECTORY="~"
+fi
+if [[ -z "$DEPLOY_SCRIPT_PATH" ]]; then
+  DEPLOY_SCRIPT_PATH="$SCRIPT_DIR/remote_deploy"
+fi
+
 git config --global user.email "$GIT_EMAIL"
 git config --global user.name "CI Bot"
 git config --global core.fileMode false
@@ -22,3 +34,24 @@ git add .
 git commit -am "Built assets."
 git push origin $CIRCLE_BRANCH:$CIRCLE_BRANCH-deploy -f --tags
 echo "If deployment was successful, an artifact should be availible in the origin repo at $CIRCLE_BRANCH-deploy".
+
+if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
+  if [[ -z "$ENCODED_HOST_MAPPING"]]; then
+    echo "ENCODED_HOST_MAPPING variable needs set up."
+    exit 1
+  fi
+  echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
+  # Variables availible after hostmapping
+  # $HOSTING_MAPPING_ENV
+  # $HOSTING_MAPPING_SSH_OPTIONS
+  # $HOSTING_MAPPING_PATH
+
+  eval "$( php  $SCRIPT_DIR/mapping.php $CIRCLE_BRANCH "$( realpath ~/hostmapping.json )" )"
+  if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
+    ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+  else
+    echo "Importing a backup from the canonical environment to $HOSTING_MAPPING_ENV"
+    ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$IMPORT_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+  fi
+  ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$CIRCLE_BRANCH-deploy" "$DOCROOT";
+fi

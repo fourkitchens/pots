@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+HOSTING_ENV="$1"
+HOSTING_PATH="$2"
+BACKUP_DIRECTORY="$3"
+
+if [[ -z "$HOSTING_ENV" ]]; then
+  echo "Argument 1: Hosting Env is missing."
+  exit 1
+fi
+if [[ -z "$HOSTING_PATH" ]]; then
+  echo "Argument 2: Hosting Path is missing."
+  exit 1
+fi
+if [[ -z "$BACKUP_DIRECTORY" ]]; then
+  BACKUP_DIRECTORY="~/backups"
+fi
+
+cd "$HOSTING_PATH"
+
+if [[ -f ./vendor/bin/drush ]]; then
+  if [[ -d "$BACKUP_DIRECTORY" ]]; then
+    echo "BACKUP DIRECTORY $BACKUP_DIRECTORY doesn't exit. Attempting to create it."
+    mkdir -p $BACKUP_DIRECTORY
+  fi
+
+  ./vendor/bin/drush sql:dump  --extra-dump=--no-tablespaces | gzip > "$( date +"%F_%T" ).sql.gz"
+else
+  echo "./vendor/bin/drush doesn't exist. Must be the first time a deployment has ever happened."
+fi

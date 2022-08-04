@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+HOSTING_ENV=$1
+HOSTING_PATH=$2
+RELEASE_BRANCH=$3
+DOCROOT=$4
+
+if [[ -z "$HOSTING_ENV" ]]; then
+  echo "Argument 1: Hosting Env is missing."
+  exit 1
+fi
+if [[ -z "$HOSTING_PATH" ]]; then
+  echo "Argument 2: Hosting Path is missing."
+  exit 1
+fi
+if [[ -z "$RELEASE_BRANCH" ]]; then
+  echo "Argument 3: Release Branch is missing."
+  exit 1
+fi
+if [[ -z "$DOCROOT" ]]; then
+  DOCROOT=web
+fi
+
+cd "$HOSTING_PATH"
+
+if [[ ! -f ./vendor/bin/drush ]]; then
+  echo "./vendor/bin/drush doesn't exist. The build may not be complete. Aborting."
+  exit 1;
+fi
+
+echo "Resetting site/default to writable so we can update settings files."
+chmod u+w $DOCROOT/sites/default $DOCROOT/sites/default/*.*
+
+echo "Fetch and checkout release using git."
+git fetch --all || exit
+git reset --hard origin/$RELEASE_BRANCH
+
+echo "Run Drush deployment steps"
+./vendor/bin/drush cr
+./vendor/bin/drush updb -y
+./vendor/bin/drush cim -y
+./vendor/bin/drush cr
+
+echo "Reset sites/default to the way it was"
+chmod a-w $DOCROOT/sites/default $DOCROOT/sites/default/*.*
