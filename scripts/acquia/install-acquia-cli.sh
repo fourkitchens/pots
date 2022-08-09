@@ -1,12 +1,6 @@
 #!/bin/sh
 
 echo '\nPulling down and installing Acquia CLI to vendor/bin...'
-cd vendor
-git clone https://github.com/typhonius/acquia_cli.git
-cd acquia_cli
-git checkout 2.0.10
-composer install
-sed -i 's/vendor//' .gitignore
-ln -s ../acquia_cli/bin/acquiacli ../bin/acquiacli
-ln -s ../../acquiacli.yml ./acquiacli.yml
-cd ../../
+cd vendor/bin
+curl -Lo acli https://github.com/acquia/cli/releases/download/1.30.1/acli.phar
+chmod +x acli
