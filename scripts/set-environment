@@ -63,7 +63,6 @@ git config --global core.fileMode false
 
 # If the main branch exists, lets override the default of master for main.
 if is_in_remote "main" && [[ "$MAIN_BRANCH" == "master" ]]
-then
   MAIN_BRANCH="main"
 fi
 
