@@ -32,8 +32,9 @@ find ./* -type d | grep .git | xargs rm -rf
 # Commit and push to a "deploy" branch.
 git add .
 git commit -am "Built assets."
-git push origin $CIRCLE_BRANCH:$CIRCLE_BRANCH-deploy -f --tags
-echo "If deployment was successful, an artifact should be availible in the origin repo at $CIRCLE_BRANCH-deploy".
+DEPLOY_BRANCH=deploy-$CIRCLE_BRANCH
+git push origin $CIRCLE_BRANCH:$DEPLOY_BRANCH -f --tags
+echo "If deployment was successful, an artifact should be availible in the origin repo at $DEPLOY_BRANCH."
 
 if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
   if [[ -z "$ENCODED_HOST_MAPPING"]]; then
@@ -53,5 +54,5 @@ if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
     echo "Importing a backup from the canonical environment to $HOSTING_MAPPING_ENV"
     ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$IMPORT_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
   fi
-  ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$CIRCLE_BRANCH-deploy" "$DOCROOT";
+  ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$DEPLOY_BRANCH" "$DOCROOT";
 fi

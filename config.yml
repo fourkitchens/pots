@@ -318,8 +318,7 @@ workflows:
                 - 'master'
   build-deploy-acquia:
     when:
-      not:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      equal: [ acquia, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -334,6 +333,31 @@ workflows:
                 - master
                 - develop
                 - /release-.*/
+      - release:
+          requires:
+          - deploy
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+  build-deploy-general:
+    when:
+      equal: [ general, << pipeline.parameters.host-variant >> ]
+    jobs:
+      - static_tests
+      - build
+      - deploy:
+          requires:
+            - static_tests
+            - build
+          filters:
+            branches:
+              only:
+                - main
+                - master
+                - develop
+                - /^release-.*$/
       - release:
           requires:
           - deploy
