@@ -39,8 +39,8 @@ echo "If deployment was successful, an artifact should be availible in the origi
 # @TODO: Restructure this so that it only deploys master on tags or some manual
 # workflow so we don't have multiple merges to master mess up production.
 if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
-  if [[ -z "$ENCODED_HOST_MAPPING"]]; then
-    echo "ENCODED_HOST_MAPPING variable needs set up."
+  if [[ -z "$ENCODED_HOST_MAPPING" ]]; then
+    echo "ENCODED_HOST_MAPPING variable needs set up.";
     exit 1
   fi
 
