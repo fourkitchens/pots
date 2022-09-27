@@ -41,18 +41,45 @@ if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
     echo "ENCODED_HOST_MAPPING variable needs set up."
     exit 1
   fi
+  # Expected format:
+  # {
+  #   "dev": { # arbitrary Enviornment name
+  #     "branch": "develop",
+  #     "ssh_host": "ip-or-hostname.com",
+  #     "ssh_user": "hosting_user",
+  #     "ssh_port": "22",
+  #     "ssh_options": "", # can be a specific key or any other ssh switch
+  #     "path": "/var/www/dev/" #path to the root of project
+  #   },
+  #   "prod": { # Must provide either a "prod" or "live" enviornment
+  #     "branch": "main",
+  #     "ssh_host": "ip-or-hostname.com",
+  #     "ssh_user": "hosting_user",
+  #     "ssh_port": "22",
+  #     "ssh_options": "", # can be a specific key or any other ssh switch
+  #     "path": "/var/www/prod" #path to the root of project
+  #   }
+  # }
+
+  # Set ☝️ as the environment variable ENCODED_HOST_MAPPING in CircleCI using a
+  # command like `cat temporary_host_map_on_my_local.json | base64 -e` and
+  # copying the results. This keeps the connection string secure and
+  # configurable
   echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
   # Variables availible after hostmapping
   # $HOSTING_MAPPING_ENV
+  # $HOSTING_MAPPING_SSH_USER
+  # $HOSTING_MAPPING_SSH_HOST
+  # $HOSTING_MAPPING_SSH_PORT
   # $HOSTING_MAPPING_SSH_OPTIONS
   # $HOSTING_MAPPING_PATH
 
   eval "$( php  $SCRIPT_DIR/mapping.php $CIRCLE_BRANCH "$( realpath ~/hostmapping.json )" )"
   if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
-    ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+    ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
   else
     echo "Importing a backup from the canonical environment to $HOSTING_MAPPING_ENV"
-    ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$IMPORT_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+    ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$IMPORT_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
   fi
-  ssh $HOSTING_MAPPING_SSH_OPTIONS "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$DEPLOY_BRANCH" "$DOCROOT";
+   ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$DEPLOY_BRANCH" "$DOCROOT";
 fi

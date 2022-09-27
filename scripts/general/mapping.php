@@ -26,6 +26,9 @@ if (isset($argc)) {
     }
     echo <<<EOF
 HOSTING_MAPPING_ENV="$env"
+HOSTING_MAPPING_SSH_USER="{$properties['ssh_user']}"
+HOSTING_MAPPING_SSH_HOST="{$properties['ssh_host']}"
+HOSTING_MAPPING_SSH_PORT="{$properties['ssh_port']}"
 HOSTING_MAPPING_SSH_OPTIONS="{$properties['ssh_options']}"
 HOSTING_MAPPING_PATH="{$properties['path']}"
 EOF;
