@@ -36,11 +36,14 @@ DEPLOY_BRANCH=deploy-$CIRCLE_BRANCH
 git push origin $CIRCLE_BRANCH:$DEPLOY_BRANCH -f --tags
 echo "If deployment was successful, an artifact should be availible in the origin repo at $DEPLOY_BRANCH."
 
+# @TODO: Restructure this so that it only deploys master on tags or some manual
+# workflow so we don't have multiple merges to master mess up production.
 if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
   if [[ -z "$ENCODED_HOST_MAPPING"]]; then
     echo "ENCODED_HOST_MAPPING variable needs set up."
     exit 1
   fi
+
   # Expected format:
   # {
   #   "dev": { # arbitrary Enviornment name
@@ -62,7 +65,7 @@ if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
   # }
 
   # Set ☝️ as the environment variable ENCODED_HOST_MAPPING in CircleCI using a
-  # command like `cat temporary_host_map_on_my_local.json | base64 -e` and
+  # command like `cat temporary_host_map_on_my_local.json | base64` and
   # copying the results. This keeps the connection string secure and
   # configurable
   echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
@@ -75,6 +78,7 @@ if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
   # $HOSTING_MAPPING_PATH
 
   eval "$( php  $SCRIPT_DIR/mapping.php $CIRCLE_BRANCH "$( realpath ~/hostmapping.json )" )"
+  # @TODO: Add a locking mechanism so that 2 deploys can't happen simultaneously.
   if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
     ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
   else
