@@ -2,6 +2,8 @@
 
 set -eo pipefail
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 if [[ -z "$ENCODED_HOST_MAPPING" ]]; then
   echo "ENCODED_HOST_MAPPING variable needs set up.";
   exit 1
