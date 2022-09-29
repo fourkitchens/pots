@@ -46,4 +46,7 @@ echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
 # $HOSTING_MAPPING_SSH_OPTIONS
 # $HOSTING_MAPPING_PATH
 
-eval "$( php  $SCRIPT_DIR/mapping.php $1 "$( realpath ~/hostmapping.json )" )"
+MAPPING_VALUE="$( php $SCRIPT_DIR/mapping.php "$1" "$( realpath ~/hostmapping.json )" )"
+
+echo $MAPPING_VALUE
+eval "$MAPPING_VALUE"
