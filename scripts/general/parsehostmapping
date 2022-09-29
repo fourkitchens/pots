@@ -34,7 +34,7 @@ fi
 # }
 
 # Set ☝️ as the environment variable ENCODED_HOST_MAPPING in CircleCI using a
-# command like `cat temporary_host_map_on_my_local.json | base64` and
+# command like `cat temporary_host_map_on_my_local.json | base64 -w0` and
 # copying the results. This keeps the connection string secure and
 # configurable
 echo $(echo $ENCODED_HOST_MAPPING | base64 -d)
