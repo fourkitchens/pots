@@ -26,7 +26,7 @@ DEPLOY_BRANCH=deploy-$CIRCLE_BRANCH
 git push origin $CIRCLE_BRANCH:$DEPLOY_BRANCH -f --tags
 echo "If deployment was successful, an artifact should be availible in the origin repo at $DEPLOY_BRANCH."
 # Provides $HOSTING_MAPPING_* variables.
-$SCRIPT_DIR/parsehostingmapping
+$SCRIPT_DIR/parsehostmapping
 if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
   echo "We will not automatically deploy to Production. Follow the documentation"
   echo "at https://circleci.com/docs/managing-api-tokens to get an api token"
