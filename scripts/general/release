@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+if [[ -z "$BACKUP_SCRIPT_PATH" ]]; then
+  BACKUP_SCRIPT_PATH="$SCRIPT_DIR/backup"
+fi
+if [[ -z "$REMOTE_BACKUP_DIRECTORY" ]]; then
+  REMOTE_BACKUP_DIRECTORY="~"
+fi
+if [[ -z "$DEPLOY_SCRIPT_PATH" ]]; then
+  DEPLOY_SCRIPT_PATH="$SCRIPT_DIR/remote_deploy"
+fi
+
+
+# @TODO: Restructure this so that it only deploys master on tags or some manual
+# workflow so we don't have multiple merges to master mess up production.
+if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
+  # Provides $HOSTING_MAPPING_* variables.
+  $SCRIPT_DIR/parsehostingmapping
+  # @TODO: Add a locking mechanism so that 2 deploys can't happen simultaneously.
+  if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
+    ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+  else
+    echo "Importing a backup from the canonical environment to $HOSTING_MAPPING_ENV"
+    ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$IMPORT_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
+  fi
+   ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$DEPLOY_SCRIPT_PATH" "$HOSTING_MAPPING_ENV" "$HOSTING_MAPPING_PATH" "$DEPLOY_BRANCH" "$DOCROOT";
+fi

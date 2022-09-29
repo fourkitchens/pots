@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -eo pipefail
+
+if [[ -z "$ENCODED_HOST_MAPPING" ]]; then
+  echo "ENCODED_HOST_MAPPING variable needs set up.";
+  exit 1
+fi
+
+# Expected format:
+# {
+#   "dev": { # arbitrary Enviornment name
+#     "branch": "develop",
+#     "ssh_host": "ip-or-hostname.com",
+#     "ssh_user": "hosting_user",
+#     "ssh_port": "22",
+#     "ssh_options": "", # can be a specific key or any other ssh switch
+#     "path": "/var/www/dev/" #path to the root of project
+#   },
+#   "prod": { # Must provide either a "prod" or "live" enviornment
+#     "branch": "main",
+#     "ssh_host": "ip-or-hostname.com",
+#     "ssh_user": "hosting_user",
+#     "ssh_port": "22",
+#     "ssh_options": "", # can be a specific key or any other ssh switch
+#     "path": "/var/www/prod" #path to the root of project
+#   }
+# }
+
+# Set ☝️ as the environment variable ENCODED_HOST_MAPPING in CircleCI using a
+# command like `cat temporary_host_map_on_my_local.json | base64` and
+# copying the results. This keeps the connection string secure and
+# configurable
+echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
+# Variables availible after hostmapping
+# $HOSTING_MAPPING_ENV
+# $HOSTING_MAPPING_SSH_USER
+# $HOSTING_MAPPING_SSH_HOST
+# $HOSTING_MAPPING_SSH_PORT
+# $HOSTING_MAPPING_SSH_OPTIONS
+# $HOSTING_MAPPING_PATH
+
+eval "$( php  $SCRIPT_DIR/mapping.php $CIRCLE_BRANCH "$( realpath ~/hostmapping.json )" )"

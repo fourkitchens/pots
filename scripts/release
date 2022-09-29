@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# This scripts does the actual push of code to an environment, running all the
+# commands needed to release the code to production (or other enviornments)
+
 set -eo pipefail
 
-# Do some release stuff here
+#TODO: make this dynamically look for a directory.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+if [[ "$HOST_VARIANT" == "general" ]]; then
+  "$SCRIPT_DIR/general/deploy"
+else
+  echo "TODO: Implement releases for other hosting variants."
+fi
+
