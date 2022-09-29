@@ -7,6 +7,10 @@ if [[ -z "$ENCODED_HOST_MAPPING" ]]; then
   exit 1
 fi
 
+if [[ -z "$1" ]]; then
+  echo "parsehostmapping script must have a branch name as a parameter."
+fi
+
 # Expected format:
 # {
 #   "dev": { # arbitrary Enviornment name
@@ -40,4 +44,4 @@ echo $(echo $ENCODED_HOST_MAPPING | base64 -d) > ~/hostmapping.json
 # $HOSTING_MAPPING_SSH_OPTIONS
 # $HOSTING_MAPPING_PATH
 
-eval "$( php  $SCRIPT_DIR/mapping.php $CIRCLE_BRANCH "$( realpath ~/hostmapping.json )" )"
+eval "$( php  $SCRIPT_DIR/mapping.php $1 "$( realpath ~/hostmapping.json )" )"

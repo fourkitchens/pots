@@ -21,7 +21,7 @@ fi
 # workflow so we don't have multiple merges to master mess up production.
 if [[ -n "$DEPLOY_USING_SSH" ]] && [[ "$DEPLOY_USING_SSH" != "NO" ]]; then
   # Provides $HOSTING_MAPPING_* variables.
-  $SCRIPT_DIR/parsehostmapping
+  $SCRIPT_DIR/parsehostmapping $RELEASE_BRANCH
   # @TODO: Add a locking mechanism so that 2 deploys can't happen simultaneously.
   if [[ "$HOSTING_MAPPING_ENV" == "prod" ]] || [[ "$HOSTING_MAPPING_ENV" == "live" ]]; then
     ssh $HOSTING_MAPPING_SSH_USER@$HOSTING_MAPPING_HOST -p$HOSTING_MAPPING_PORT "bash -s " < "$BACKUP_SCRIPT_PATH" "$HOSTING_MAPPING_ENV $HOSTING_MAPPING_PATH" "$REMOTE_BACKUP_DIRECTORY";
