@@ -6,9 +6,9 @@ function is_in_remote() {
     local existed_in_remote=$(git ls-remote --heads origin ${branch})
 
     if [[ -z ${existed_in_remote} ]]; then
-        echo 0
+        echo "NO"
     else
-        echo 1
+        echo "YES"
     fi
 }
 
@@ -62,8 +62,7 @@ git config --global user.name "CI Bot"
 git config --global core.fileMode false
 
 # If the main branch exists, lets override the default of master for main.
-if is_in_remote "main" && [[ "$MAIN_BRANCH" == "master" ]]
-then
+if [[ "$( is_in_remote "main" )" == "YES" ]] && [[ "$MAIN_BRANCH" == "master" ]] ; then
   MAIN_BRANCH="main"
 fi
 

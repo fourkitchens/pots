@@ -21,9 +21,11 @@ fi
 
 # Delete old multidev environments associated
 # with a PR that has been merged or closed.
-terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true
+echo "Deleting old Multidevs for Closed PRs. Sending to Background."
+( terminus -n build:env:delete:pr $TERMINUS_SITE --yes || true ) &
 
 # Prepare for Pantheon
+echo "Preparing Artifact for Pantheon."
 composer -n run prepare-for-pantheon
 
 echo "Building from $CI_BRANCH."

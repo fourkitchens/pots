@@ -3,8 +3,8 @@
 set -eo pipefail
 
 #TODO: make this dynamically look for a directory.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 if [[ "$HOST_VARIANT" == "acquia" ]]; then
-  SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
   "$SCRIPT_DIR/acquia/deploy"
 else
   "$SCRIPT_DIR/general/deploy"

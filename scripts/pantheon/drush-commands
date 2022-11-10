@@ -2,6 +2,7 @@
 
 set -eo pipefail
 
+echo "Starting environment deploy commmands."
 # Update the Drupal database
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- updatedb -y
 
@@ -21,8 +22,11 @@ fi
 # Clear Drupal cache
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- cr
 
+echo "Clearing the Edge cache."
 # Clear the environment cache
 terminus -n env:clear-cache $TERMINUS_SITE.$TERMINUS_ENV
 
 # Ensure secrets are set
 terminus -n secrets:set "$TERMINUS_SITE.$TERMINUS_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+
+echo "Done deploying. Your environment is ready for your review."
