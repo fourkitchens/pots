@@ -1,0 +1,33 @@
+#!/bin/bash
+
+set -eo pipefail
+
+#
+# This script deploys the build artifact to Pantheon.
+# On the master branch the dev environment is used.
+# Otherwise a multidev environment is used.
+#
+
+# Authenticate with Terminus
+terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+if [[ "$PUSH_DEPLOY_ENV" != 'test' ]] && [[ "$PUSH_DEPLOY_ENV" != 'live' ]]
+then
+  echo "\$PUSH_DEPLOY_ENV must one of 'test' or 'live'. Recieved \"$PUSH_DEPLOY_ENV\""
+  exit 1
+fi
+if [[ "$PUSH_DEPLOY_ENV" == 'test' ]]
+then
+  terminus -n env:deploy --yes "$TERMINUS_SITE.$PUSH_DEPLOY_ENV" --sync-content
+fi
+if [[ "$PUSH_DEPLOY_ENV" == 'live' ]]
+then
+  terminus -n backup:create --yes "$TERMINUS_SITE.$PUSH_DEPLOY_ENV" --element=db
+  terminus -n env:deploy --yes "$TERMINUS_SITE.$PUSH_DEPLOY_ENV"
+fi
+TERMINUS_ENV="$PUSH_DEPLOY_ENV"
+# We make the assummption that this script is being run from the project root.
+if [ -f "./.circleci/scripts/drush-commands" ]; then
+  ./.circleci/scripts/drush-commands
+else
+  ./vendor/ensembleiq/project_ci/scripts/pantheon/drush-commands
+fi
