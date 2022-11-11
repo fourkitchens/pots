@@ -28,6 +28,14 @@ parameters:
     description: "Where the build stores the built artifact temporarly."
     default: "/tmp/build"
     type: string
+  run_dependency_update:
+    description: "Flag for upgrading all the dependencies."
+    default: false
+    type: boolean
+  push_deploy_env:
+    description: "Name of environment to deploy release to."
+    default: 'empty'
+    type: string
 
 # These are the directories that will be saved between builds and deploys.
 # Change these if the list below needs different folders. Directory names are
@@ -168,8 +176,36 @@ defaults: &defaults
   working_directory: ~/project
   environment:
     <<: *env
+pantheon: &pantheon
+  <<: *defaults
+  docker:
+    # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+    - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+  environment:
+    <<: *env
+    TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+    NOTIFY: 'scripts/github/add-commit-comment {project} {sha} "Created multidev environment [{site}#{env}]({dashboard-url})." {site-url}'
+    TERM: dumb
+    # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
+    PUSH_DEPLOY_ENV: << pipeline.parameters.push_deploy_env >>
 
 jobs:
+  update_dependencies:
+    <<: *defaults
+    steps:
+      - setup-project
+      - run:
+          name: Set Github authentication
+          command: composer config --global github-oauth.github.com "$GITHUB_TOKEN";
+      - run: "composer update  --no-dev"
+      - run:
+          name: Set up Git
+          command: |
+            git config --global user.email "$GIT_EMAIL"
+            git config --global user.name "CI Bot"
+            git config --global core.fileMode false
+      - run: "git add . && git commit -am \"Updating dependencies\" && git push origin $CIRCLE_BRANCH"
+
   # Static Testing. This will run independently of a build to fail quickly.
   static_tests:
     <<: *defaults
@@ -239,16 +275,7 @@ jobs:
   # environment configuration. To enable this job, set the host-variant
   # parameter to "pantheon".
   deploy_to_pantheon:
-    <<: *defaults
-    docker:
-      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
-    environment:
-      <<: *env
-      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
-      NOTIFY: 'scripts/github/add-commit-comment {project} {sha} "Created multidev environment [{site}#{env}]({dashboard-url})." {site-url}'
-      TERM: dumb
-      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
+    <<: *pantheon
     steps:
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
@@ -272,6 +299,36 @@ jobs:
               ./vendor/ensembleiq/project_ci/scripts/pantheon/deploy
             fi
           no_output_timeout: 30m
+
+  # Pushes the code that is on the dev environment on pantheon to test/live.
+  #
+  # Validate that the code on dev is the code you want before running this job.
+  # Relies on an api parameter to determine if you intend to push to live or
+  # test.
+  deploy_to_test_live_pantheon:
+    <<: *pantheon
+    steps:
+      - setup-project:
+          cache-version: pantheon-v1
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/ensembleiq/project_ci/scripts/set-environment
+            fi
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy_to_test_live" ]; then
+              ./.circleci/scripts/deploy_to_test_live
+            else
+              ./vendor/ensembleiq/project_ci/scripts/pantheon/deploy_to_test_live
+            fi
+          no_output_timeout: 30m
+
+
 
   # Run this on one of the main branches to push a release back to github.
   #
@@ -319,6 +376,10 @@ jobs:
 workflows:
   version: 2
   build-deploy-pantheon:
+    when:
+      and:
+        - not: << pipeline.parameters.run_dependency_update >>
+        - equal: [ 'empty', << pipeline.parameters.push_deploy_env >> ]
     jobs:
       - static_tests
       - build
@@ -328,6 +389,21 @@ workflows:
           requires:
             - static_tests
             - build
+  push-deploy-test-live-pantheon:
+    when:
+      or:
+        - equal: [ live, << pipeline.parameters.push_deploy_env >> ]
+        - equal: [ test, << pipeline.parameters.push_deploy_env >> ]
+    jobs:
+      - deploy_to_test_live_pantheon
+          #filters:
+          #  branches:
+          #    only:
+          #      - master
+  update_check:
+    when: << pipeline.parameters.run_dependency_update >>
+    jobs:
+      - update_dependencies
   scheduled_backup:
     triggers:
        - schedule:
@@ -343,7 +419,7 @@ workflows:
 
 ###### Please do not change things in the commands without contributing back.
 orbs:
-  node: circleci/node@4.1.0
+  node: circleci/node@5.0.3
   php: circleci/php@1.1.0
   aws-cli: circleci/aws-cli@2.0.3
 commands:
@@ -371,19 +447,36 @@ commands:
       - install-node-from-nvmrc
   install-project-dependencies:
     description: install both npm and composer dependencies
+    parameters:
+      cache-version:
+        default: v1
+        description: >-
+          Change the default cache version if you need to clear the cache for any
+          reason.
+        type: string
     steps:
-      - php/install-packages
+      - php/install-packages:
+          cache-version: <<parameters.cache-version>>
       # Lets install the node packages as they are defined by the lock file
       # in the project.
       - node/install-packages:
+          cache-version: <<parameters.cache-version>>
           cache-path: ~/project/node_modules
           override-ci-command: npm ci
   setup-project:
     description: setup php and node and download all dependencies for the project.
+    parameters:
+      cache-version:
+        default: v1
+        description: >-
+          Change the default cache version if you need to clear the cache for any
+          reason.
+        type: string
     steps:
       - checkout
       - install-project-dependency-managers
-      - install-project-dependencies
+      - install-project-dependencies:
+          cache-version: <<parameters.cache-version>>
       - run:
           name: Set up environment variables
           command: |

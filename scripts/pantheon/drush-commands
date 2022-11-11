@@ -6,17 +6,20 @@ echo "Starting environment deploy commmands."
 # Update the Drupal database
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- updatedb -y
 
-terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- pm-enable stage_file_proxy -y
-
 # Clear Drupal cache
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- cr
+
+if [[ "$TERMINUS_ENV" != 'live' ]]; then
+  echo 'UPDATE file_managed SET uri = REPLACE(uri, "s3://", "public://");' | terminus drush "$TERMINUS_SITE.$TERMINUS_ENV" sql:cli
+  terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- pm-enable stage_file_proxy -y
+fi
 
 # Revert the Features
 terminus -n drush --yes "$TERMINUS_SITE.$TERMINUS_ENV" -- features-import eiq_base_feature -y
 
 # Push the special site features.
 if [[ "$TERMINUS_SITE" == "canadian-healthcare" ]] || [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
-  terminus remote:drush --yes --quiet "$TERMINUS_SITE.$TERMINUS_ENV" -- config-import --partial --source=modules/custom/eiq_override/chn_migrate/config/optional -y
+  terminus -n drush --yes "$TERMINUS_SITE.$TERMINUS_ENV" -- config-import --partial --source=modules/custom/eiq_override/chn_migrate/config/optional -y
 fi
 
 # Clear Drupal cache
@@ -26,7 +29,9 @@ echo "Clearing the Edge cache."
 # Clear the environment cache
 terminus -n env:clear-cache $TERMINUS_SITE.$TERMINUS_ENV
 
-# Ensure secrets are set
-terminus -n secrets:set "$TERMINUS_SITE.$TERMINUS_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+if [[ "$TERMINUS_ENV" != 'live' ]]; then
+  # Ensure secrets are set
+  terminus -n secrets:set "$TERMINUS_SITE.$TERMINUS_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+fi
 
 echo "Done deploying. Your environment is ready for your review."
