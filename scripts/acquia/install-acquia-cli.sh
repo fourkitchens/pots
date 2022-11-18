@@ -14,10 +14,13 @@ verlt() {
 echo '\nPulling down and installing Acquia CLI to vendor/bin...'
 cd vendor/bin
 PHP_VERSION=$(php -r "echo PHP_VERSION;")
+echo "PHP $PHP_VERSION is installed on this environment."
 # If php is Less than 8, install the PHP 7 version of acli
-if [[ verlt "$PHP_VERSION" "8.0.0" ]]; then
+if verlt "$PHP_VERSION" "8.0.0"; then
+  echo "Downloading PHP 7 version."
   curl -Lo acli https://github.com/acquia/cli/releases/download/1.30.1/acli.phar
 else
+  echo "Downloading PHP 8 version."
   curl -Lo acli https://github.com/acquia/cli/releases/latest/download/acli.phar
 fi
 
