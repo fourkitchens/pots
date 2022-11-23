@@ -24,11 +24,10 @@ then
   terminus -n backup:create --yes "$TERMINUS_SITE.$PUSH_DEPLOY_ENV" --element=db
   terminus -n env:deploy --yes "$TERMINUS_SITE.$PUSH_DEPLOY_ENV"
 fi
-export TERMINUS_ENV="$PUSH_DEPLOY_ENV"
-echo $TERMINUS_ENV
+
 # We make the assummption that this script is being run from the project root.
 if [ -f "./.circleci/scripts/drush-commands" ]; then
-  ./.circleci/scripts/drush-commands
+  ./.circleci/scripts/drush-commands "$TERMINUS_SITE" "$PUSH_DEPLOY_ENV"
 else
-  ./vendor/ensembleiq/project_ci/scripts/pantheon/drush-commands
+  ./vendor/ensembleiq/project_ci/scripts/pantheon/drush-commands "$TERMINUS_SITE" "$PUSH_DEPLOY_ENV"
 fi
