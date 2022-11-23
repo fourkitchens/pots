@@ -2,6 +2,16 @@
 
 set -eo pipefail
 
+echo $TERMINUS_ENV
+
+P_SITE=${1:-$TERMINUS_SITE}
+P_ENV=${2:-$TERMINUS_ENV}
+
+if [[ -z "$P_SITE" ]] || [[ -z "$P_ENV" ]]; then
+  echo "Provide a site and enviornment."
+  exit 1
+fi
+
 echo "Starting environment deploy commmands."
 # Update the Drupal database
 terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- updatedb -y
