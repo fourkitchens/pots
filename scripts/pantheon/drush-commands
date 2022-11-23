@@ -3,6 +3,8 @@
 set -eo pipefail
 
 echo $TERMINUS_ENV
+echo $1
+echo $2
 
 P_SITE=${1:-$TERMINUS_SITE}
 P_ENV=${2:-$TERMINUS_ENV}
