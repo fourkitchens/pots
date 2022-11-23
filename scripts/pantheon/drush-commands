@@ -19,34 +19,34 @@ fi
 
 echo "Starting environment deploy commmands."
 # Update the Drupal database
-terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- updatedb -y
+terminus -n drush "$P_SITE.$P_ENV" -- updatedb -y
 
 # Clear Drupal cache
-terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- cr
+terminus -n drush "$P_SITE.$P_ENV" -- cr
 
-if [[ "$TERMINUS_ENV" != 'live' ]]; then
-  echo 'UPDATE file_managed SET uri = REPLACE(uri, "s3://", "public://");' | terminus drush "$TERMINUS_SITE.$TERMINUS_ENV" sql:cli
-  terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- pm-enable stage_file_proxy -y
+if [[ "$P_ENV" != 'live' ]]; then
+  echo 'UPDATE file_managed SET uri = REPLACE(uri, "s3://", "public://");' | terminus drush "$P_SITE.$P_ENV" sql:cli
+  terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
 
 # Revert the Features
-terminus -n drush --yes "$TERMINUS_SITE.$TERMINUS_ENV" -- features-import eiq_base_feature -y
+terminus -n drush --yes "$P_SITE.$P_ENV" -- features-import eiq_base_feature -y
 
 # Push the special site features.
-if [[ "$TERMINUS_SITE" == "canadian-healthcare" ]] || [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
-  terminus -n drush --yes "$TERMINUS_SITE.$TERMINUS_ENV" -- config-import --partial --source=modules/custom/eiq_override/chn_migrate/config/optional -y
+if [[ "$P_SITE" == "canadian-healthcare" ]] || [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
+  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=modules/custom/eiq_override/chn_migrate/config/optional -y
 fi
 
 # Clear Drupal cache
-terminus -n drush "$TERMINUS_SITE.$TERMINUS_ENV" -- cr
+terminus -n drush "$P_SITE.$P_ENV" -- cr
 
 echo "Clearing the Edge cache."
 # Clear the environment cache
-terminus -n env:clear-cache $TERMINUS_SITE.$TERMINUS_ENV
+terminus -n env:clear-cache $P_SITE.$P_ENV
 
-if [[ "$TERMINUS_ENV" != 'live' ]]; then
+if [[ "$P_ENV" != 'live' ]]; then
   # Ensure secrets are set
-  terminus -n secrets:set "$TERMINUS_SITE.$TERMINUS_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+  terminus -n secrets:set "$P_SITE.$P_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
 fi
 
 echo "Done deploying. Your environment is ready for your review."
