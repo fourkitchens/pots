@@ -199,7 +199,7 @@ jobs:
           name: run PHP build step
           command: |
             if [ -f "./.circleci/scripts/build/php" ]; then
-              ./.circleci/scripts/build/build/php
+              ./.circleci/scripts/build/php
             else
               ./vendor/fourkitchens/project_ci/scripts/build/php
             fi
