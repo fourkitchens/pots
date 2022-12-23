@@ -108,6 +108,13 @@ elif [[ ${HOST_VARIANT} == "acquia" ]] ; then
   CANONICAL_ENV=${CANONICAL_ENV:-prod}
 fi
 
+if [[ -z "$SYNC_CONFIG" ]]; then
+  if [[ "$( dirname "$( find ./config -name "system.site.yml" -print -quit )")" == "." ]]; then
+    SYNC_CONFIG="YES"
+  else
+    SYNC_CONFIG="NO"
+  fi
+fi
 
 #=====================================================================================================================
 # EXPORT needed environment variables
@@ -150,6 +157,7 @@ fi
   echo "export ARTIFACTS_DIR='artifacts'"
   echo "export ARTIFACTS_FULL_DIR='/tmp/artifacts'"
   echo "export CANONICAL_ENV='$CANONICAL_ENV'"
+  echo "export SYNC_CONFIG='$SYNC_CONFIG'"
 ) >> $BASH_ENV
 
 # If a Terminus machine token and site name are defined

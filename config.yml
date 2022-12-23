@@ -104,6 +104,21 @@ env: &env
   #
   # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
 
+  # Sync Configuration
+  #
+  # We can't identify the sync directory here, so we make an assumption it's
+  # that if we have the unique (not usually config ignored) system.site.yml
+  # somewhere in the ./config directory, that you likely want configuration to
+  # be synced. You can manually set it here though.
+  #
+  # Possible Values YES, NO
+  # Default: Yes if Any directory in the ./config directory (inclusive) contains
+  #          system.site.yml. Ex: YES if ./config/system.site.yml or
+  #          ./config/default/system.site.yml or ./config/sync/system.site.yml
+  #          exists.
+  #
+  # SYNC_CONFIG_DIR: NO
+
   #####################################
   # OPTIONAL CONFIGURATION FOR PANTHEON
   #####################################
