@@ -368,16 +368,36 @@ workflows:
           type: approval
           requires:
             - deploy_to_pantheon
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
       - deploy_to_pantheon_to_test:
           requires:
             - hold-dev
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
       - hold-test:
           type: approval
           requires:
             - deploy_to_pantheon_to_test
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
       - deploy_to_pantheon_to_live:
           requires:
             - hold-test
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
 
       - release:
           requires:
