@@ -49,7 +49,7 @@ echo "Clearing the Edge cache."
 # Clear the environment cache
 terminus -n env:clear-cache "$P_SITE.$P_ENV"
 
-if [[ "$P_ENV" != 'live' ]] && [[ "$P_ENV" != 'test']]; then
+if [[ "$P_ENV" != 'live' ]] && [[ "$P_ENV" != 'test' ]]; then
   # Ensure secrets are set
   terminus -n secrets:set "$P_SITE.$P_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
 fi
