@@ -12,7 +12,7 @@ fi
 if [[ -z "$P_ENV" ]]; then
   P_ENV="$TERMINUS_ENV"
 fi
-if [[ -z "$P_SYNC_CONFIG_DIR" ]]; then
+if [[ -z "$P_SYNC_CONFIG" ]]; then
   if [[ "$( dirname "$( find ./config -name "system.site.yml" -print -quit )")" == "." ]]; then
     P_SYNC_CONFIG="YES"
   else
