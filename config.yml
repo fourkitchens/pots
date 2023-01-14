@@ -25,7 +25,7 @@ parameters:
     default: "web"
     type: string
   artifact_workspace:
-    description: "Where the build stores the built artifact temporarly."
+    description: "Where the build stores the built artifact temporarily."
     default: "/tmp/build"
     type: string
 
@@ -36,6 +36,7 @@ persisting_dirs: &persisting_dirs
   - << pipeline.parameters.docroot >>
   - vendor
   - drush
+  - .gitignore
 # - node_modules
 
 
@@ -117,7 +118,7 @@ env: &env
   #          ./config/default/system.site.yml or ./config/sync/system.site.yml
   #          exists.
   #
-  # SYNC_CONFIG: NO
+  # SYNC_CONFIG: No
 
   #####################################
   # OPTIONAL CONFIGURATION FOR PANTHEON
@@ -209,6 +210,7 @@ jobs:
   # them.
   build:
     <<: *defaults
+    resource_class: medium+
     steps:
       - setup-project
       - run:
@@ -265,7 +267,6 @@ jobs:
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
-      NOTIFY: 'scripts/github/add-commit-comment {project} {sha} "Created multidev environment [{site}#{env}]({dashboard-url})." {site-url}'
       TERM: dumb
       # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
@@ -293,6 +294,45 @@ jobs:
             fi
           no_output_timeout: 30m
 
+  deploy_to_pantheon_to_test:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
+    steps:
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-test" ]; then
+              ./.circleci/scripts/deploy-to-test
+            else
+              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-test
+            fi
+
+  deploy_to_pantheon_to_live:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
+    steps:
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-live" ]; then
+              ./.circleci/scripts/deploy-to-live
+            else
+              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-live
+            fi
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -324,6 +364,21 @@ workflows:
           requires:
             - static_tests
             - build
+      - hold-dev:
+          type: approval
+          requires:
+            - deploy_to_pantheon
+      - deploy_to_pantheon_to_test:
+          requires:
+            - hold-dev
+      - hold-test:
+          type: approval
+          requires:
+            - deploy_to_pantheon_to_test
+      - deploy_to_pantheon_to_live:
+          requires:
+            - hold-test
+
       - release:
           requires:
           - deploy_to_pantheon
@@ -530,6 +585,6 @@ commands:
               sudo apt-get update -y
               sudo apt-get -y install rsync
             fi
-            rsync -lrz << parameters.workspace_root >>/* .
+            rsync -lrz << parameters.workspace_root >>/* << parameters.workspace_root >>/.[^.]* .
 
 ##### Feel free to alter the tasks below to point to your own tasks.

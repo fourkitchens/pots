@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -eo pipefail
+
+# Authenticate with Terminus
+terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+
+terminus env:deploy "$TERMINUS_SITE".test --sync-content
+
+# We make the assummption that this script is being run from the project root.
+if [ -f "./.circleci/scripts/drush-commands" ]; then
+  ./.circleci/scripts/drush-commands $TERMINUS_SITE test $SYNC_CONFIG
+else
+  ./vendor/fourkitchens/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE test $SYNC_CONFIG
+fi
+
+echo "Done deploying. Your environment is ready for your review."
