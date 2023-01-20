@@ -38,7 +38,7 @@ if [[ "$P_SYNC_CONFIG" == "YES" ]] ; then
   echo "Importing Configuration"
   terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
 else
-  echo "We didn't import any configuraiton."
+  echo "We didn't import any configuration."
 fi
 
 # Clear Drupal cache
@@ -52,4 +52,10 @@ terminus -n env:clear-cache "$P_SITE.$P_ENV"
 if [[ "$P_ENV" != 'live' ]] && [[ "$P_ENV" != 'test' ]]; then
   # Ensure secrets are set
   terminus -n secrets:set "$P_SITE.$P_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+fi
+
+# We make the assummption that this script is being run from the project root.
+# Allow for post deployment hooks.
+if [ -f "./.circleci/scripts/post-drush-commands" ]; then
+  ./.circleci/scripts/post-drush-commands $P_SITE $P_ENV
 fi
