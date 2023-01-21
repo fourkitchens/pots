@@ -303,8 +303,10 @@ jobs:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
-      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
+      - checkout
+      - php/install-composer
+      - php/install-packages
       - run:
           name: deploy to Pantheon
           command: |
@@ -323,8 +325,10 @@ jobs:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
-      # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
+      - checkout
+      - php/install-composer
+      - php/install-packages
       - run:
           name: deploy to Pantheon
           command: |
