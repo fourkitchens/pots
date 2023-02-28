@@ -118,7 +118,7 @@ env: &env
   #          ./config/default/system.site.yml or ./config/sync/system.site.yml
   #          exists.
   #
-  # SYNC_CONFIG: No
+  # SYNC_CONFIG: NO
 
   #####################################
   # OPTIONAL CONFIGURATION FOR PANTHEON
