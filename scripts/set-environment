@@ -108,7 +108,6 @@ elif [[ ${HOST_VARIANT} == "acquia" ]] ; then
   CANONICAL_ENV=${CANONICAL_ENV:-prod}
 fi
 
-
 #=====================================================================================================================
 # EXPORT needed environment variables
 #

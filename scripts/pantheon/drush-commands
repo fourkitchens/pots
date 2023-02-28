@@ -1,0 +1,61 @@
+#!/bin/bash
+
+set -eo pipefail
+
+P_SITE="$1"
+P_ENV="$2"
+P_SYNC_CONFIG="$3"
+
+if [[ -z "$P_SITE" ]]; then
+  P_SITE="$TERMINUS_SITE"
+fi
+if [[ -z "$P_ENV" ]]; then
+  P_ENV="$TERMINUS_ENV"
+fi
+if [[ -z "$P_SYNC_CONFIG" ]]; then
+  if [[ "$( dirname "$( find ./config -name "system.site.yml" -print -quit )")" == "./config" ]]; then
+    P_SYNC_CONFIG="YES"
+  else
+    P_SYNC_CONFIG="NO"
+  fi
+fi
+
+if [[ -z "$P_SITE" ]] || [[ -z "$P_ENV" ]]; then
+  echo "Provide a site and enviornment."
+  exit 1
+fi
+
+echo "Starting environment deploy commmands."
+# Update the Drupal database
+terminus -n drush "$P_SITE.$P_ENV" -- updatedb -y
+
+# Clear Drupal cache
+echo "Clearing Drupal cache."
+terminus -n drush "$P_SITE.$P_ENV" -- cr
+
+# If exported configuration is available, then import it.
+if [[ "$P_SYNC_CONFIG" == "YES" ]] ; then
+  echo "Importing Configuration"
+  terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
+else
+  echo "We didn't import any configuration."
+fi
+
+# Clear Drupal cache
+echo "Clearing Drupal cache again."
+terminus -n drush "$P_SITE.$P_ENV" -- cr
+
+echo "Clearing the Edge cache."
+# Clear the environment cache
+terminus -n env:clear-cache "$P_SITE.$P_ENV"
+
+if [[ "$P_ENV" != 'live' ]] && [[ "$P_ENV" != 'test' ]]; then
+  # Ensure secrets are set
+  terminus -n secrets:set "$P_SITE.$P_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+fi
+
+# We make the assummption that this script is being run from the project root.
+# Allow for post deployment hooks.
+if [ -f "./.circleci/scripts/post-drush-commands" ]; then
+  ./.circleci/scripts/post-drush-commands $P_SITE $P_ENV
+fi

@@ -25,7 +25,7 @@ parameters:
     default: "web"
     type: string
   artifact_workspace:
-    description: "Where the build stores the built artifact temporarly."
+    description: "Where the build stores the built artifact temporarily."
     default: "/tmp/build"
     type: string
 
@@ -36,6 +36,7 @@ persisting_dirs: &persisting_dirs
   - << pipeline.parameters.docroot >>
   - vendor
   - drush
+  - .gitignore
 # - node_modules
 
 
@@ -104,6 +105,21 @@ env: &env
   #
   # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
 
+  # Sync Configuration
+  #
+  # We can't identify the sync directory here, so we make an assumption it's
+  # that if we have the unique (not usually config ignored) system.site.yml
+  # somewhere in the ./config directory, that you likely want configuration to
+  # be synced. You can manually set it here though.
+  #
+  # Possible Values YES, NO
+  # Default: Yes if Any directory in the ./config directory (inclusive) contains
+  #          system.site.yml. Ex: YES if ./config/system.site.yml or
+  #          ./config/default/system.site.yml or ./config/sync/system.site.yml
+  #          exists.
+  #
+  # SYNC_CONFIG: NO
+
   #####################################
   # OPTIONAL CONFIGURATION FOR PANTHEON
   #####################################
@@ -147,6 +163,7 @@ env: &env
   # Default: NO
   #
   # REBUILD_DEVELOPMENT_ENV_EVERY_PUSH: YES
+
 
   # Define the name of the multidev used for the Github development branch. Must
   # follow the multidev naming conventions for Pantheon.
@@ -193,6 +210,7 @@ jobs:
   # them.
   build:
     <<: *defaults
+    resource_class: medium+
     steps:
       - setup-project
       - run:
@@ -249,7 +267,6 @@ jobs:
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
-      NOTIFY: 'scripts/github/add-commit-comment {project} {sha} "Created multidev environment [{site}#{env}]({dashboard-url})." {site-url}'
       TERM: dumb
       # BUILD_TOOLS_VERSION: ^2.0.0-alpha4
     steps:
@@ -277,6 +294,49 @@ jobs:
             fi
           no_output_timeout: 30m
 
+  deploy_to_pantheon_to_test:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+    steps:
+      - checkout
+      - php/install-composer
+      - php/install-packages
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-test" ]; then
+              ./.circleci/scripts/deploy-to-test
+            else
+              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-test
+            fi
+
+  deploy_to_pantheon_to_live:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+    steps:
+      - checkout
+      - php/install-composer
+      - php/install-packages
+      - run:
+          name: deploy to Pantheon
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-live" ]; then
+              ./.circleci/scripts/deploy-to-live
+            else
+              ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-live
+            fi
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -308,6 +368,41 @@ workflows:
           requires:
             - static_tests
             - build
+      - hold-dev:
+          type: approval
+          requires:
+            - deploy_to_pantheon
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+      - deploy_to_pantheon_to_test:
+          requires:
+            - hold-dev
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+      - hold-test:
+          type: approval
+          requires:
+            - deploy_to_pantheon_to_test
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+      - deploy_to_pantheon_to_live:
+          requires:
+            - hold-test
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+
       - release:
           requires:
           - deploy_to_pantheon
@@ -344,47 +439,148 @@ workflows:
                 - 'master'
 
 ###### Please do not change things in the commands without contributing back.
+node-install-parameters: &node-install-parameters
+  install-yarn:
+      default: false
+      description: Install Yarn?
+      type: boolean
+  node-install-dir:
+      default: /usr/local
+      description: |
+          Where should Node.js be installed?
+      type: string
+  node-version:
+      default: ""
+      description: |
+          Specify the full version tag to install. To install the latest version, set the version to `latest`. If unspecified, the version listed in .nvmrc will be installed. If no .nvmrc file exists the active LTS version of Node.js will be installed by default. For a full list of releases, see the following: https://nodejs.org/en/download/releases
+      type: string
+  yarn-version:
+      default: ""
+      description: |
+          Pick a version of Yarn to install (if no version is specified, the latest stable version will be installed): https://github.com/yarnpkg/yarn/releases
+      type: string
+node-install-packages-parameters: &node-install-packages-parameters
+  node-app-dir:
+    default: .
+    description: >-
+      Path to the directory containing your package.json file. Not needed if
+      package.json lives in the root.
+    type: string
+  node-cache-only-lockfile:
+    default: true
+    description: >
+      If true, package.json will be ignored in the cache key. Useful for
+      projects where package.json changes do not always invalidate dependencies.
+
+      Note: package.json will still be the final fallback key incase a project
+      is not configured with a lock file.
+    type: boolean
+  node-cache-path:
+    default: ''
+    description: >
+      By default, this orb will utilize 'npm ci' and cache the '~/.npm'
+      directory. Override which path to cache with this parameter.
+    type: string
+  node-cache-version:
+    default: v1
+    description: >-
+      Change the default cache version if you need to clear the cache for any
+      reason.
+    type: string
+  node-check-cache:
+    default: never
+    description: |
+      Yarn berry only for Zero install support -
+      Use 'always' to always --check-cache argument to yarn install.
+      Use 'detect' to enable caching of yarn.lock and to only add when required.
+    enum:
+      - never
+      - always
+      - detect
+    type: enum
+  node-include-branch-in-cache-key:
+    default: true
+    description: |
+      If true, this cache bucket will only apply to jobs within the same branch.
+    type: boolean
+  node-override-ci-command:
+    default: ''
+    description: >
+      By default, packages will be installed with "npm ci", "yarn install
+      --frozen-lockfile" or "yarn install --immutable".
+
+      Optionally supply a custom package installation command, with any
+      additional flags needed.
+    type: string
+  node-pkg-manager:
+    default: npm
+    description: Select the default node package manager to use. NPM v5+ Required.
+    enum:
+      - npm
+      - yarn
+      - yarn-berry
+    type: enum
+  node-with-cache:
+    default: true
+    description: Cache your node packages automatically for faster install times.
+    type: boolean
 orbs:
-  node: circleci/node@4.1.0
+  node: circleci/node@5.0.3
   php: circleci/php@1.1.0
 commands:
-  install-node-from-nvmrc:
-    description: Workaround for installing node on projects with .nvmrc files.
-    steps:
-      # Work around for node install issue. This happens because nvm checks
-      # to see if the version of node in the .nvmrc exists before it does
-      # anything else. Therefore, we have to remove the .nvmrc file before we
-      # install nvm, and then put it back. Afterwards, we set the version of
-      # node in the .nvmrc file as the default.
-      # see: https://github.com/CircleCI-Public/node-orb/issues/65
-      - run: "if [ -f \".nvmrc\" ]; then rm .nvmrc; fi"
-      - node/install
-      - run: "if git status --short | grep .nvmrc; then git checkout .nvmrc; else echo \"stable\" > .nvmrc; fi"
-      - run: nvm install
-      - run: nvm alias default `cat .nvmrc`
-      - run: node --version
   install-project-dependency-managers:
     description: setup composer and npm.
+    parameters:
+      <<: *node-install-parameters
     steps:
       # Most projects require both composer and npm to be installed to do
       # anything.
       - php/install-composer
-      - install-node-from-nvmrc
+      - node/install:
+          install-yarn: << parameters.install-yarn >>
+          node-install-dir: << parameters.node-install-dir >>
+          node-version: << parameters.node-version >>
+          yarn-version: << parameters.yarn-version >>
+      - run: node --version
   install-project-dependencies:
     description: install both npm and composer dependencies
+    parameters:
+      <<: *node-install-packages-parameters
     steps:
       - php/install-packages
-      # Lets install the node packages as they are defined by the lock file
-      # in the project.
       - node/install-packages:
-          cache-path: ~/project/node_modules
-          override-ci-command: npm ci
+          app-dir: << parameters.node-app-dir >>
+          cache-only-lockfile: << parameters.node-cache-only-lockfile >>
+          cache-path: << parameters.node-cache-path >>
+          cache-version: << parameters.node-cache-version >>
+          check-cache: << parameters.node-check-cache >>
+          include-branch-in-cache-key: << parameters.node-include-branch-in-cache-key >>
+          override-ci-command: << parameters.node-override-ci-command >>
+          pkg-manager: << parameters.node-pkg-manager >>
+          with-cache: << parameters.node-with-cache >>
+
   setup-project:
     description: setup php and node and download all dependencies for the project.
+    parameters:
+      <<: *node-install-packages-parameters
+      <<: *node-install-parameters
     steps:
       - checkout
-      - install-project-dependency-managers
-      - install-project-dependencies
+      - install-project-dependency-managers:
+          install-yarn: << parameters.install-yarn >>
+          node-install-dir: << parameters.node-install-dir >>
+          node-version: << parameters.node-version >>
+          yarn-version: << parameters.yarn-version >>
+      - install-project-dependencies:
+          node-app-dir: << parameters.node-app-dir >>
+          node-cache-only-lockfile: << parameters.node-cache-only-lockfile >>
+          node-cache-path: << parameters.node-cache-path >>
+          node-cache-version: << parameters.node-cache-version >>
+          node-check-cache: << parameters.node-check-cache >>
+          node-include-branch-in-cache-key: << parameters.node-include-branch-in-cache-key >>
+          node-override-ci-command: << parameters.node-override-ci-command >>
+          node-pkg-manager: << parameters.node-pkg-manager >>
+          node-with-cache: << parameters.node-with-cache >>
       - run:
           name: Set up environment variables
           command: |
@@ -413,6 +609,6 @@ commands:
               sudo apt-get update -y
               sudo apt-get -y install rsync
             fi
-            rsync -lrz << parameters.workspace_root >>/* .
+            rsync -lrz << parameters.workspace_root >>/* << parameters.workspace_root >>/.[^.]* .
 
 ##### Feel free to alter the tasks below to point to your own tasks.
