@@ -566,6 +566,14 @@ commands:
       <<: *node-install-parameters
     steps:
       - checkout
+      - run:
+          name: Install rsync
+          command: |
+            if ! command -v rsync &> /dev/null
+            then
+              sudo apt-get update -y
+              sudo apt-get -y install rsync
+            fi
       - install-project-dependency-managers:
           install-yarn: << parameters.install-yarn >>
           node-install-dir: << parameters.node-install-dir >>
