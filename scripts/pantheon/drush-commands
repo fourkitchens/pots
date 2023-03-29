@@ -32,11 +32,9 @@ if [[ "$SYNC_CONFIG" != "NO" ]]; then
   else
     "$( dirname $0 )/drush-config-import" $P_SITE $P_ENV
   fi
+else
+  echo "SYNC_CONFIG is set to 'NO'. Leaving configuration alone."
 fi
-
-# Clear Drupal cache
-echo "Clearing Drupal cache again."
-terminus -n drush "$P_SITE.$P_ENV" -- cr
 
 echo "Clearing the Edge cache."
 # Clear the environment cache

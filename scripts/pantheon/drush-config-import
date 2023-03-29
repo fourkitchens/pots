@@ -24,3 +24,7 @@ if find ./config -name "system.site.yml" | grep "./config" -q ; then
 else
   echo "We didn't import any configuration."
 fi
+
+# Clear Drupal cache
+echo "Clearing Drupal cache again."
+terminus -n drush "$P_SITE.$P_ENV" -- cr
