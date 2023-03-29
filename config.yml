@@ -110,7 +110,7 @@ env: &env
   # We can't identify the sync directory here, so we make an assumption it's
   # that if we have the unique (not usually config ignored) system.site.yml
   # somewhere in the ./config directory, that you likely want configuration to
-  # be synced. You can manually set it here though.
+  # be synced. You can manually turn it off here though.
   #
   # Possible Values YES, NO
   # Default: Yes if Any directory in the ./config directory (inclusive) contains

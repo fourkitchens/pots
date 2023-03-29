@@ -74,9 +74,9 @@ fi
 
 # We make the assummption that this script is being run from the project root.
 if [ -f "./.circleci/scripts/drush-commands" ]; then
-  ./.circleci/scripts/drush-commands $TERMINUS_SITE $TERMINUS_ENV $SYNC_CONFIG
+  ./.circleci/scripts/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 else
-  ./vendor/fourkitchens/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE $TERMINUS_ENV $SYNC_CONFIG
+  ./vendor/fourkitchens/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 fi
 
 echo "Done deploying. Your environment is ready for your review."

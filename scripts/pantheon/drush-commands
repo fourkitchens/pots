@@ -4,20 +4,12 @@ set -eo pipefail
 
 P_SITE="$1"
 P_ENV="$2"
-P_SYNC_CONFIG="$3"
 
 if [[ -z "$P_SITE" ]]; then
   P_SITE="$TERMINUS_SITE"
 fi
 if [[ -z "$P_ENV" ]]; then
   P_ENV="$TERMINUS_ENV"
-fi
-if [[ -z "$P_SYNC_CONFIG" ]]; then
-  if [[ "$( dirname "$( find ./config -name "system.site.yml" -print -quit )")" == "./config" ]]; then
-    P_SYNC_CONFIG="YES"
-  else
-    P_SYNC_CONFIG="NO"
-  fi
 fi
 
 if [[ -z "$P_SITE" ]] || [[ -z "$P_ENV" ]]; then
@@ -34,16 +26,15 @@ echo "Clearing Drupal cache."
 terminus -n drush "$P_SITE.$P_ENV" -- cr
 
 # If exported configuration is available, then import it.
-if [[ "$P_SYNC_CONFIG" == "YES" ]] ; then
-  echo "Importing Configuration"
-  terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
+if [[ "$SYNC_CONFIG" != "NO" ]]; then
+  if [ -f "./.circleci/scripts/drush-config-import" ]; then
+    ./.circleci/scripts/drush-config-import $P_SITE $P_ENV
+  else
+    "$( dirname $0 )/drush-config-import" $P_SITE $P_ENV
+  fi
 else
-  echo "We didn't import any configuration."
+  echo "SYNC_CONFIG is set to 'NO'. Leaving configuration alone."
 fi
-
-# Clear Drupal cache
-echo "Clearing Drupal cache again."
-terminus -n drush "$P_SITE.$P_ENV" -- cr
 
 echo "Clearing the Edge cache."
 # Clear the environment cache
