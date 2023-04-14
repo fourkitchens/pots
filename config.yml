@@ -308,6 +308,14 @@ jobs:
       - php/install-composer
       - php/install-packages
       - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/project_ci/scripts/set-environment
+            fi
+      - run:
           name: deploy to Pantheon
           command: |
             if [ -f "./.circleci/scripts/deploy-to-test" ]; then
@@ -329,6 +337,14 @@ jobs:
       - checkout
       - php/install-composer
       - php/install-packages
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/project_ci/scripts/set-environment
+            fi
       - run:
           name: deploy to Pantheon
           command: |
