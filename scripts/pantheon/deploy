@@ -45,7 +45,7 @@ then
   fi
   terminus -n build:env:push "$TERMINUS_SITE.dev" --yes
 else
-  CREATE_OPTIONS="--yes --pr-id '$PR_NUMBER'"
+  CREATE_OPTIONS="--yes --pr-id $PR_NUMBER"
   # Create a new multidev environment (or push to an existing one)
   echo "Building Multidev $TERMINUS_ENV from $CANONICAL_ENV"
   if [[ "$TERMINUS_ENV" != "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_MULTIDEV_ENV_EVERY_PUSH" == "YES" ]]
