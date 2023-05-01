@@ -45,7 +45,7 @@ then
   fi
   terminus -n build:env:push "$TERMINUS_SITE.dev" --yes
 else
-  CREATE_OPTIONS="--yes --pr-id '$PR_NUMBER' --git-ref-compare '$DEFAULT_BRANCH'"
+  CREATE_OPTIONS="--yes --pr-id '$PR_NUMBER'"
   # Create a new multidev environment (or push to an existing one)
   echo "Building Multidev $TERMINUS_ENV from $CANONICAL_ENV"
   if [[ "$TERMINUS_ENV" != "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_MULTIDEV_ENV_EVERY_PUSH" == "YES" ]]
@@ -71,6 +71,19 @@ else
   else
     terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" $CREATE_OPTIONS
   fi
+fi
+
+# @TODO after BUILD TOOLS 3.0.6 is released to docker containers we can use --git-ref-compare instead of this workaround
+# Force a change to pantheon.yml to force it to rebuild.
+PANTHEON_YML_DIFF="$( git diff $DEFAULT_BRANCH -- pantheon.yml )"
+PANTHEON_UPSTREAM_YML_DIFF=""
+if [ -f pantheon.upstream.yml ]; then
+  PANTHEON_UPSTREAM_YML_DIFF="$( git diff $DEFAULT_BRANCH -- pantheon.upstream.yml )"
+fi
+
+if [[ ! -z "$PANTHEON_YML_DIFF" && ! -z "$PANTHEON_UPSTREAM_YML_DIFF" ]]; then
+  echo "# Workaround change to pantheon.yml to force envrionment update" >> pantheon.yml
+  terminus -n build:env:push "$TERMINUS_SITE.$TERMINUS_ENV" --message="Workaround change to pantheon.yml to force envrionment update"
 fi
 
 # We make the assummption that this script is being run from the project root.
