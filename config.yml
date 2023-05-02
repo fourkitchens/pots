@@ -11,7 +11,7 @@ parameters:
     # This value must be only a major.minor version is pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
-    default: "7.4"
+    default: "8.1"
   tz:
     description: The timezone definition.
     type: string
@@ -552,6 +552,13 @@ commands:
       # Most projects require both composer and npm to be installed to do
       # anything.
       - php/install-composer
+      - run:
+          name: Set up Github Token
+          command: |
+            # Configure the GitHub Oauth token if it is available
+            if hash composer 2>/dev/null && [[ -n "$GITHUB_TOKEN" ]]; then
+              composer -n config --global github-oauth.github.com $GITHUB_TOKEN
+            fi
       - node/install:
           install-yarn: << parameters.install-yarn >>
           node-install-dir: << parameters.node-install-dir >>
