@@ -75,10 +75,10 @@ fi
 
 # @TODO after BUILD TOOLS 3.0.6 is released to docker containers we can use --git-ref-compare instead of this workaround
 # Force a change to pantheon.yml to force it to rebuild.
-PANTHEON_YML_DIFF="$( git diff $DEFAULT_BRANCH -- pantheon.yml )"
+PANTHEON_YML_DIFF="$( git diff $MAIN_BRANCH -- pantheon.yml )"
 PANTHEON_UPSTREAM_YML_DIFF=""
 if [ -f pantheon.upstream.yml ]; then
-  PANTHEON_UPSTREAM_YML_DIFF="$( git diff $DEFAULT_BRANCH -- pantheon.upstream.yml )"
+  PANTHEON_UPSTREAM_YML_DIFF="$( git diff $MAIN_BRANCH -- pantheon.upstream.yml )"
 fi
 
 if [[ ! -z "$PANTHEON_YML_DIFF" && ! -z "$PANTHEON_UPSTREAM_YML_DIFF" ]]; then
