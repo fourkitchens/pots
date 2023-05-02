@@ -81,7 +81,7 @@ if [ -f pantheon.upstream.yml ]; then
   PANTHEON_UPSTREAM_YML_DIFF="$( git diff $MAIN_BRANCH -- pantheon.upstream.yml )"
 fi
 
-if [[ ! -z "$PANTHEON_YML_DIFF" && ! -z "$PANTHEON_UPSTREAM_YML_DIFF" ]]; then
+if [[ ! -z "$PANTHEON_YML_DIFF" || ! -z "$PANTHEON_UPSTREAM_YML_DIFF" ]]; then
   echo "# Workaround change to pantheon.yml to force envrionment update" >> pantheon.yml
   terminus -n build:env:push "$TERMINUS_SITE.$TERMINUS_ENV" --message="Workaround change to pantheon.yml to force envrionment update"
 fi
