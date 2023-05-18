@@ -30,7 +30,7 @@ if [[ "$P_ENV" != 'live' ]]; then
 fi
 
 # Revert the Features
-terminus -n drush --yes "$P_SITE.$P_ENV" -- features-import eiq_base_feature -y
+terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
 
 # Push the special site features.
 if [[ "$P_SITE" == "canadian-healthcare" ]] || [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
