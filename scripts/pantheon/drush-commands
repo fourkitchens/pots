@@ -29,11 +29,15 @@ if [[ "$P_ENV" != 'live' ]]; then
   terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
 
-# If exported configuration is available, then import it.
-if [ -f "config/default/system.site.yml" ] ; then
+# If config splits are available, import them.
+if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.yml" ] ; then
   terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter
   terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
   terminus -n drush "$P_SITE.$P_ENV" -- cr
+fi
+
+# If exported configuration is available, then import it.
+if [ -f "config/default/system.site.yml" ] ; then
   terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
 fi
 
