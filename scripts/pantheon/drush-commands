@@ -29,12 +29,16 @@ if [[ "$P_ENV" != 'live' ]]; then
   terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
 
-# Revert the Features
-terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
+# If config splits are available, import them.
+if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.yml" ] ; then
+  terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter
+  terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
+  terminus -n drush "$P_SITE.$P_ENV" -- cr
+fi
 
-# Push the special site features.
-if [[ "$P_SITE" == "canadian-healthcare" ]] || [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=modules/custom/eiq_override/chn_migrate/config/optional -y
+# If exported configuration is available, then import it.
+if [ -f "config/default/system.site.yml" ] ; then
+  terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
 fi
 
 # Clear Drupal cache
