@@ -29,6 +29,7 @@ if [[ "$P_ENV" != 'live' ]]; then
   terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
 
+echo "Importing config splits."
 # If config splits are available, import them.
 if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.yml" ] ; then
   terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter
@@ -37,7 +38,8 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
 fi
 
 # Partial split imports for PS
-if [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
+if [[ "$P_SITE" == "profession-sante" ]]; then
+  echo "Importing partial split config for PS."
   terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/default -y
   terminus -n drush "$P_SITE.$P_ENV" -- cr
   terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/upstream -y
@@ -47,7 +49,8 @@ if [[ "$TERMINUS_SITE" == "profession-sante" ]]; then
 fi
 
 # Import config
-if [[ "$TERMINUS_SITE" != "profession-sante" ]]; then
+if [[ "$P_SITE" != "profession-sante" ]]; then
+  echo "Importing default config."
   terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
 fi
 
