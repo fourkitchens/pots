@@ -44,7 +44,7 @@ if [[ "$P_SITE" == "profession-sante" ]]; then
   terminus -n drush "$P_SITE.$P_ENV" -- cr
   terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/upstream -y
   terminus -n drush "$P_SITE.$P_ENV" -- cr
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/local_override -y
+  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/local -y
   terminus -n drush "$P_SITE.$P_ENV" -- cr
 fi
 
