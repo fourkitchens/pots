@@ -49,10 +49,8 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
 fi
 
 # Import config
-if [[ "$P_SITE" != "profession-sante" ]]; then
-  echo "Importing default config."
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
-fi
+echo "Importing default config."
+terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
 
 # Clear Drupal cache
 terminus -n drush "$P_SITE.$P_ENV" -- cr
