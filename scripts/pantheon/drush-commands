@@ -35,17 +35,18 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
   terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter
   terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
   terminus -n drush "$P_SITE.$P_ENV" -- cr
-fi
-
-# Partial split imports for PS
-if [[ "$P_SITE" == "profession-sante" ]]; then
-  echo "Importing partial split config for PS."
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/default -y
-  terminus -n drush "$P_SITE.$P_ENV" -- cr
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/upstream -y
-  terminus -n drush "$P_SITE.$P_ENV" -- cr
-  terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/local -y
-  terminus -n drush "$P_SITE.$P_ENV" -- cr
+    # Partial split imports for PS
+  if [[ "$P_SITE" == "profession-sante" ]]; then
+    echo "Importing partial default config for PS."
+    terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/default -y
+    terminus -n drush "$P_SITE.$P_ENV" -- cr
+    echo "Importing partial upstream config for PS."
+    terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/upstream -y
+    terminus -n drush "$P_SITE.$P_ENV" -- cr
+    echo "Importing partial local config for PS."
+    terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/local -y
+    terminus -n drush "$P_SITE.$P_ENV" -- cr
+  fi
 fi
 
 # Import config
