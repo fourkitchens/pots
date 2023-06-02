@@ -48,9 +48,12 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
   fi
 fi
 
-# Import config
-echo "Importing default config."
-terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import -y
+
+# If exported configuration is available, then import it.
+if [ -f "config/default/system.site.yml" ] ; then
+  echo "Importing default config."
+  terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
+fi
 
 # Clear Drupal cache
 terminus -n drush "$P_SITE.$P_ENV" -- cr
