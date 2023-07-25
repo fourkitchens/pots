@@ -45,6 +45,9 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
     terminus -n drush "$P_SITE.$P_ENV" -- cr
     echo "Importing partial local config for PS."
     terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/local -y
+    if [[ "$P_ENV" != 'live' ]]; then
+      terminus -n drush --yes "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/test -y
+    fi
   fi
 fi
 
