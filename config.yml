@@ -11,7 +11,7 @@ parameters:
     # This value must be only a major.minor version is pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
-    default: "8.1"
+    default: "8.2"
   tz:
     description: The timezone definition.
     type: string
@@ -26,7 +26,7 @@ parameters:
     type: string
   artifact_workspace:
     description: "Where the build stores the built artifact temporarily."
-    default: "/tmp/build"
+    default: "~/project"
     type: string
 
 # These are the directories that will be saved between builds and deploys.
@@ -186,6 +186,7 @@ defaults: &defaults
     name: php/default
     tag: << pipeline.parameters.php-version >>
   working_directory: ~/project
+  resource_class: small
   environment:
     <<: *env
 
@@ -274,9 +275,6 @@ jobs:
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
-          name: Upgrade composer
-          command: composer self-update
-      - run:
           name: setup-environment-vars
           command: |
             if [ -f "./.circleci/scripts/set-environment" ]; then
@@ -304,9 +302,8 @@ jobs:
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
     steps:
-      - checkout
-      - php/install-composer
-      - php/install-packages
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
           name: setup-environment-vars
           command: |
@@ -334,9 +331,8 @@ jobs:
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
     steps:
-      - checkout
-      - php/install-composer
-      - php/install-packages
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
           name: setup-environment-vars
           command: |
@@ -581,14 +577,9 @@ commands:
           override-ci-command: << parameters.node-override-ci-command >>
           pkg-manager: << parameters.node-pkg-manager >>
           with-cache: << parameters.node-with-cache >>
-
-  setup-project:
-    description: setup php and node and download all dependencies for the project.
-    parameters:
-      <<: *node-install-packages-parameters
-      <<: *node-install-parameters
+  install-rsync:
+    description: install rsync
     steps:
-      - checkout
       - run:
           name: Install rsync
           command: |
@@ -597,6 +588,14 @@ commands:
               sudo apt-get update -y
               sudo apt-get -y install rsync
             fi
+  setup-project:
+    description: setup php and node and download all dependencies for the project.
+    parameters:
+      <<: *node-install-packages-parameters
+      <<: *node-install-parameters
+    steps:
+      - checkout
+      - install-rsync
       - install-project-dependency-managers:
           install-yarn: << parameters.install-yarn >>
           node-install-dir: << parameters.node-install-dir >>
@@ -631,15 +630,4 @@ commands:
       - checkout
       - attach_workspace:
           at: << parameters.workspace_root >>
-      # Rsync the build artifact pieces back into the project.
-      - run:
-          name: sync build artifact
-          command: |
-            if ! command -v rsync &> /dev/null
-            then
-              sudo apt-get update -y
-              sudo apt-get -y install rsync
-            fi
-            rsync -lrz << parameters.workspace_root >>/* << parameters.workspace_root >>/.[^.]* .
-
 ##### Feel free to alter the tasks below to point to your own tasks.
