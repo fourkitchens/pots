@@ -26,7 +26,7 @@ echo "Deleting old Multidevs for Closed PRs. Sending to Background."
 
 # Prepare for Pantheon
 echo "Preparing Artifact for Pantheon."
-terminus -n build:getignore:cut $TERMINUS_SITE
+terminus -n build:gitignore:cut $TERMINUS_SITE
 
 echo "Building from $CI_BRANCH."
 echo "The Main Branch is $MAIN_BRANCH."
