@@ -2,8 +2,15 @@
 
 set -eo pipefail
 
+echo "Preparing to deploy to Producion"
+
 # Authenticate with Terminus
-terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+if [[ -z "$( terminus whoami )" ]]; then
+  echo "Logging in to terminus"
+  terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+else
+  echo "Using existing terminus session"
+fi
 
 echo "Backing up Production."
 terminus backup:create "$TERMINUS_SITE".live --element=db
