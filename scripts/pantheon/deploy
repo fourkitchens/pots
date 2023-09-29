@@ -96,7 +96,7 @@ fi
 if [ -f "./.circleci/scripts/drush-commands" ]; then
   ./.circleci/scripts/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 else
-  ./vendor/fourkitchens/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE $TERMINUS_ENV
+  ./vendor/fourkitchens/pots/scripts/pantheon/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 fi
 
 echo "Done deploying. Your environment is ready for your review."

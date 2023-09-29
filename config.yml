@@ -103,7 +103,7 @@ env: &env
   #
   # Default: empty
   #
-  # SANATIZE_SCRIPT: ./vendor/fourkitchens/project_ci/scripts/sanatize-db
+  # SANATIZE_SCRIPT: ./vendor/fourkitchens/pots/scripts/sanatize-db
 
   # Sync Configuration
   #
@@ -203,7 +203,7 @@ jobs:
             if [ -f "./.circleci/scripts/test/static" ]; then
               ./.circleci/scripts/test/static
             else
-              ./vendor/fourkitchens/project_ci/scripts/test/static
+              ./vendor/fourkitchens/pots/scripts/test/static
             fi
 
   # Job used to create what will be committed to the Artifact.
@@ -221,7 +221,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/php" ]; then
               ./.circleci/scripts/build/php
             else
-              ./vendor/fourkitchens/project_ci/scripts/build/php
+              ./vendor/fourkitchens/pots/scripts/build/php
             fi
       - run:
           name: run theme build step
@@ -229,7 +229,7 @@ jobs:
             if [ -f "./.circleci/scripts/build/theme" ]; then
               ./.circleci/scripts/build/theme
             else
-              ./vendor/fourkitchens/project_ci/scripts/build/theme
+              ./vendor/fourkitchens/pots/scripts/build/theme
             fi
       - persist_to_workspace:
           root: .
@@ -252,7 +252,7 @@ jobs:
             if [ -f "./.circleci/scripts/deploy" ]; then
               ./.circleci/scripts/deploy
             else
-              ./vendor/fourkitchens/project_ci/scripts/deploy
+              ./vendor/fourkitchens/pots/scripts/deploy
             fi
 
   # Job used to deploy to pantheon.
@@ -318,7 +318,7 @@ jobs:
             if [ -f "./.circleci/scripts/release" ]; then
               ./.circleci/scripts/release
             else
-              ./vendor/fourkitchens/project_ci/scripts/release
+              ./vendor/fourkitchens/pots/scripts/release
             fi
 
 workflows:
@@ -571,8 +571,8 @@ commands:
           command: |
             if [ -f "./.circleci/scripts/set-environment" ]; then
               ./.circleci/scripts/set-environment
-            elif [ -f "./vendor/fourkitchens/project_ci/set-environment" ]; then
-              ./vendor/fourkitchens/project_ci/set-environment
+            elif [ -f "./vendor/fourkitchens/pots/set-environment" ]; then
+              ./vendor/fourkitchens/pots/set-environment
             fi
   restore-project:
     description: Restore a Drupal project that was persisted from another job.
@@ -608,7 +608,7 @@ commands:
             if [ -f "./.circleci/scripts/set-environment" ]; then
               ./.circleci/scripts/set-environment
             else
-              ./vendor/fourkitchens/project_ci/scripts/set-environment
+              ./vendor/fourkitchens/pots/scripts/set-environment
             fi
       - when:
           condition:
@@ -621,7 +621,7 @@ commands:
                   if [ -f "./.circleci/scripts/deploy-to-live" ]; then
                     ./.circleci/scripts/deploy
                   else
-                    ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy
+                    ./vendor/fourkitchens/pots/scripts/pantheon/deploy
                   fi
                 no_output_timeout: 30m
       - when:
@@ -636,7 +636,7 @@ commands:
                   if [ -f "./.circleci/scripts/deploy-to-<< parameters.environment >>" ]; then
                     ./.circleci/scripts/deploy-to-<< parameters.environment >>
                   else
-                    ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-<< parameters.environment >>
+                    ./vendor/fourkitchens/pots/scripts/pantheon/deploy-to-<< parameters.environment >>
                   fi
                 no_output_timeout: 30m
       - save_cache:

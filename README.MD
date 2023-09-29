@@ -12,7 +12,7 @@ should be easier. With each version upgrade, you should check your
 The easiest way to do this is to use a standardized diff tool and diff
 ``.circleci/config.yml` with `config.yml`. An example may look like:
 ```
-diff -u --color .circleci/config.yml ./vendor/fourkitchens/project_ci/config.yml
+diff -u --color .circleci/config.yml ./vendor/fourkitchens/pots/config.yml
 ```
 
 Validate the changes and move over the ones you want to keep.
@@ -58,9 +58,9 @@ need:
 1. Install the package and copy over the template config.yml
 
     ```
-    composer require fourkitchens/project_ci
+    composer require fourkitchens/pots
     mkdir .circleci
-    cp vendor/fourkitchens/project_ci/config.yml .circleci/config.yml
+    cp vendor/fourkitchens/pots/config.yml .circleci/config.yml
     ```
 2. Make sure your composer.json and package.json meet the requirements of the
    default scripts.

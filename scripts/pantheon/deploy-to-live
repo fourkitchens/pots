@@ -22,7 +22,7 @@ terminus env:deploy "$TERMINUS_SITE".live
 if [ -f "./.circleci/scripts/drush-commands" ]; then
   ./.circleci/scripts/drush-commands $TERMINUS_SITE live $SYNC_CONFIG
 else
-  ./vendor/fourkitchens/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE live $SYNC_CONFIG
+  ./vendor/fourkitchens/pots/scripts/pantheon/drush-commands $TERMINUS_SITE live $SYNC_CONFIG
 fi
 
 echo "Done deploying. The site is now live."
