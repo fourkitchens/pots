@@ -3,14 +3,14 @@
 This Composer package provides the starts for what you need to test and deploy
 an hosted site on something like Acquia.
 
-## Upgradeing
+## Upgrading
 
 If you are using the standard scripts that ship with this package, upgrading
 should be easier. With each version upgrade, you should check your
 `.circleci/config.yml` file for changes against the `config.yml` file here.
 
 The easiest way to do this is to use a standardized diff tool and diff
-``.circleci/config.yml` with `config.yml`. An example may look like:
+`.circleci/config.yml` with `config.yml`. An example may look like:
 ```
 diff -u --color .circleci/config.yml ./vendor/fourkitchens/pots/config.yml
 ```
