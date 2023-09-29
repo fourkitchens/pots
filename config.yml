@@ -302,6 +302,7 @@ jobs:
     steps:
       - deploy-to-pantheon-env:
           environment: 'live'
+
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -632,7 +633,7 @@ commands:
                 name: deploy to Pantheon
                 command: |
                   if [ -f "./.circleci/scripts/deploy-to-<< parameters.environment >>" ]; then
-                    ./.circleci/scripts/deploy-to-live
+                    ./.circleci/scripts/deploy-to-<< parameters.environment >>
                   else
                     ./vendor/fourkitchens/project_ci/scripts/pantheon/deploy-to-<< parameters.environment >>
                   fi
