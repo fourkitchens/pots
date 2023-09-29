@@ -1,11 +1,14 @@
 {
-    "name": "fourkitchens/project_ci",
-    "description": "Scripts to help aid in deployment for sites.",
+    "name": "fourkitchens/pots",
+    "description": "Push On To Site. Scripts to help aid in deployment for Drupal sites.",
     "authors": [
         {
             "name": "Allan Chappell",
             "email": "allan@fourkitchens.com"
         }
     ],
+    "conflict": {
+        "fourkitchens/project_ci": "*"
+    },
     "require": {}
 }
