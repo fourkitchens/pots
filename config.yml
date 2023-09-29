@@ -8,7 +8,7 @@ parameters:
   php-version:
     description: major.minor version number for php version to use.
     type: string
-    # This value must be only a major.minor version is pantheon is the
+    # This value must be only a major.minor version if pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
     default: "8.2"
@@ -107,7 +107,7 @@ env: &env
 
   # Sync Configuration
   #
-  # We can't identify the sync directory here, so we make an assumption it's
+  # We can't identify the sync directory here, so we make an assumption
   # that if we have the unique (not usually config ignored) system.site.yml
   # somewhere in the ./config directory, that you likely want configuration to
   # be synced. You can manually turn it off here though.
@@ -155,8 +155,9 @@ env: &env
   #
   # REBUILD_MULTIDEV_ENV_EVERY_PUSH: YES
 
-  # Re-sync content for the Github development multidev every time a push is
-  # made to Pantheon.
+  # Re-sync content for the Github
+  # development multidev on Pantheon every time a push is made to
+  # DEVELOPMENT_BRANCH branch.
   #
   # Possible Values: NO, YES
   #
