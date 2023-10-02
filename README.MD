@@ -3,6 +3,48 @@
 This Composer package provides the starts for what you need to test and deploy
 an hosted site on something like Acquia.
 
+## TOC
+
+* [Upgrading](#upgrading)
+* [Dependencies](#dependencies)
+* [Installation](#installation)
+* [Configure Environment](#configure-environment)
+   + [Shared](#shared)
+      - [Deploy Bot Setup](#deploy-bot-setup)
+         * [Create a Github Account for the Deploy Bot](#create-a-github-account-for-the-deploy-bot)
+      - [Configure an SSH Key](#configure-an-ssh-key)
+      - [Get a Github Token](#get-a-github-token)
+      - [Configure Environment Variables](#configure-environment-variables)
+   + [Pantheon](#pantheon)
+      - [Create a Pantheon Account for your Deploy Bot](#create-a-pantheon-account-for-your-deploy-bot)
+      - [Set up SSH Key](#set-up-ssh-key)
+      - [Get a Terminus Token (or Machine Token)](#get-a-terminus-token--or-machine-token-)
+      - [Configure More CircleCi Environment Variables](#configure-more-circleci-environment-variables)
+   + [Acquia](#acquia)
+      - [Create a Acquia Account for your Deploy Bot](#create-a-acquia-account-for-your-deploy-bot)
+      - [Set up SSH Key](#set-up-ssh-key-1)
+      - [Configure More CircleCi Environment Variables](#configure-more-circleci-environment-variables-1)
+* [Configure CircleCI config.yml](#configure-circleci-configyml)
+   + [Pipeline Parameter Defaults](#pipeline-parameter-defaults)
+      - [php-version:](#php-version-)
+      - [tz](#tz)
+      - [host-variant](#host-variant)
+         * [pantheon](#pantheon)
+         * [acquia](#acquia)
+         * [general](#general)
+      - [docroot](#docroot)
+      - [artifact_workspace](#artifact-workspace)
+   + [Other Configuration](#other-configuration)
+      - [persisting_dirs](#persisting-dirs)
+* [Configurable Environment Variables](#configurable-environment-variables)
+   + [Shared](#shared-1)
+   + [Pantheon Specific](#pantheon-specific)
+   + [Acquia Specific](#acquia-specific)
+* [Helper Environment Variables](#helper-environment-variables)
+* [Configure Composer.json](#configure-composerjson)
+* [Configure Scripts](#configure-scripts)
+   + [Pantheon Specific Scripts](#pantheon-specific-scripts)
+
 ## Upgrading
 
 If you are using the standard scripts that ship with this package, upgrading
