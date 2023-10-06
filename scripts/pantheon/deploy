@@ -43,8 +43,8 @@ then
     terminus -n env:clone-content "$TERMINUS_SITE.$CANONICAL_ENV" dev
     if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
       $( $SANITIZE_SCRIPT )
     fi
   fi
@@ -59,8 +59,8 @@ else
     terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
     if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
       $( $SANITIZE_SCRIPT )
     fi
   elif [[ "$TERMINUS_ENV" == "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH" == "YES" ]]
@@ -69,8 +69,8 @@ else
     terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
     if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
       $( $SANITIZE_SCRIPT )
     fi
   else
