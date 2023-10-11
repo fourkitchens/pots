@@ -593,11 +593,11 @@ commands:
         default: "dev"
         type: string
     steps:
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
       - run:
           name: Prep Terminus Token for Cache Key
           command: echo "$TERMINUS_TOKEN" > terminus-cache-key.txt
-      - restore-project:
-          workspace_root: << pipeline.parameters.artifact_workspace >>
       - restore_cache:
           keys:
             - terminus-cache-v1-{{ checksum "terminus-cache-key.txt" }}
