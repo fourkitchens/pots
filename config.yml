@@ -510,11 +510,19 @@ commands:
             if hash composer 2>/dev/null && [[ -n "$GITHUB_TOKEN" ]]; then
               composer -n config --global github-oauth.github.com $GITHUB_TOKEN
             fi
+      - restore_cache:
+          keys:
+            - nvm-v2-{{ checksum ".nvmrc" }}
+            - nvm-v2-
       - node/install:
           install-yarn: << parameters.install-yarn >>
           node-install-dir: << parameters.node-install-dir >>
           node-version: << parameters.node-version >>
           yarn-version: << parameters.yarn-version >>
+      - save_cache:
+          key: nvm-v2-{{ checksum ".nvmrc" }}
+          paths:
+            - ~/.nvm
       - run: node --version
   install-project-dependencies:
     description: install both npm and composer dependencies
