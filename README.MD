@@ -387,9 +387,11 @@ be any number of things like `public_html` for generic hosts.
 #### artifact_workspace
 This setting moves where the built artifact should be. This is particularly
 helpful when you want to pick and choose items from the build versus just
-sending the whole artifact to your host. The `~/project` directory is the
-that is committed to an "Artifact Build". By default, this value is also
-`~/project`, so that everything that was built during the "build" job is then
+sending the whole artifact to your host. The `~/project` directory is always
+committed to an "Artifact Build". Therefore, by changing this directory to
+something like `/tmp/project`, you can use rsync to move parts built by
+the previous build script into `~/project`. By default, this value of this setting
+is `~/project`, so that everything that was built during the "build" job is then
 pushed to the host.
 
 ### Other Configuration
