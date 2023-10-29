@@ -8,7 +8,7 @@
         }
     ],
     "require": {
-        "drupal/core-composer-scaffold": "^9.4.8"
+        "drupal/core-composer-scaffold": "*"
     },
     "extra": {
         "drupal-scaffold": {
