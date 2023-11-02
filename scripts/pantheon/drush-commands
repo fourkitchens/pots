@@ -33,7 +33,11 @@ echo "Importing config splits."
 # If config splits are available, import them.
 if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.yml" ] ; then
   terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter config_ignore -y
-  terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
+  if [[ "$P_SITE" == "path2purchase" ]]; then
+    terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=../config/splits/_config_splits --partial --yes
+  else
+    terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
+  fi
   terminus -n drush "$P_SITE.$P_ENV" -- cr
     # Partial split imports for PS
   if [[ "$P_SITE" == "profession-sante" ]]; then
