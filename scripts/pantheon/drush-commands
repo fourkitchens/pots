@@ -40,6 +40,7 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
   fi
   if [[ "$P_ENV" == 'live' ]] && [ -f "config/splits/_config_splits/config_split.config_split.live.yml" ]; then
     terminus -n drush "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/live -y
+    terminus -n drush "$P_SITE.$P_ENV" -- pm-enable s3fs -y
     terminus -n drush "$P_SITE.$P_ENV" -- s3fs:refresh-cache
   fi
   terminus -n drush "$P_SITE.$P_ENV" -- cr
