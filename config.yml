@@ -99,11 +99,11 @@ env: &env
   #
   # CANONICAL_ENV: dev
 
-  # Script used to sanitize databases. Only used when CANONICAL_ENV is not dev.
+  # Script used to sanatize databases. Only used when CANONICAL_ENV is not dev.
   #
   # Default: empty
   #
-  # SANITIZE_SCRIPT: ./vendor/fourkitchens/pots/scripts/sanitize-db
+  # SANATIZE_SCRIPT: ./vendor/fourkitchens/pots/scripts/sanatize-db
 
   # Sync Configuration
   #
