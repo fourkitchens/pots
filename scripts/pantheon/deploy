@@ -71,7 +71,7 @@ else
     then
       echo "Sanitizing Database."
       # If we've set a sanitization script for the database, run it.
-      $( $SANiTIZE_SCRIPT )
+      $( $SANITIZE_SCRIPT )
     fi
   else
     terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" $CREATE_OPTIONS
