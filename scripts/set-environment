@@ -106,7 +106,7 @@ if [[ ! -z "$SANATIZE_SCRIPT" ]] ; then
   SANITIZE_SCRIPT="$SANATIZE_SCRIPT"
   echo "WARNING: The variable SANATIZE_SCRIPT is deprecated and will be removed in a future version of pots. Please use the corrected variable SANITIZE_SCRIPT instead."
 elif [[ -z "$SANATIZE_SCRIPT" ]]; then
-  SANITIZE_SCRIPT="$SANITIZE_SCRIPT"
+  SANITIZE_SCRIPT='$SANITIZE_SCRIPT'
 fi
 
 # Prepare Variables that are shared on both acquia and pantheon
