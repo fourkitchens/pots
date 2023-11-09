@@ -154,7 +154,7 @@ fi
   echo "export DEV_SITE_URL='https://${DEV_SITE_BASIC_AUTH}dev-$TERMINUS_SITE.pantheonsite.io/'"
   echo "export TEST_SITE_URL='https://${TEST_SITE_BASIC_AUTH}test-$TERMINUS_SITE.pantheonsite.io/'"
   echo "export LIVE_SITE_URL='https://${LIVE_SITE_BASIC_AUTH}live-$TERMINUS_SITE.pantheonsite.io/'"
-  echo "export SANITIZE_SCRIPT='${SANITIZE_SCRIPT}'"
+  echo "export SANITIZE_SCRIPT='$SANITIZE_SCRIPT'"
   echo "export ARTIFACTS_DIR='artifacts'"
   echo "export ARTIFACTS_FULL_DIR='/tmp/artifacts'"
   echo "export CANONICAL_ENV='$CANONICAL_ENV'"
