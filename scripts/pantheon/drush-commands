@@ -22,6 +22,7 @@ echo "Starting environment deploy commmands."
 # Prepare db for non s3 on non-live.
 if [[ "$P_ENV" != 'live' ]]; then
   echo 'UPDATE file_managed SET uri = REPLACE(uri, "s3://", "public://");' | terminus drush "$P_SITE.$P_ENV" sql:cli
+  terminus -n drush "$P_SITE.$P_ENV" -- cr
   terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
 
