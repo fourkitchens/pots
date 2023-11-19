@@ -23,9 +23,7 @@ echo "Starting environment deploy commmands."
 if [[ "$P_ENV" != 'live' ]]; then
   echo 'UPDATE file_managed SET uri = REPLACE(uri, "s3://", "public://");' | terminus drush "$P_SITE.$P_ENV" sql:cli
   terminus -n drush "$P_SITE.$P_ENV" -- cr
-  terminus -n drush "$P_SITE.$P_ENV" -- pm-enable stage_file_proxy -y
 fi
-
 
 # Update the Drupal database
 terminus -n drush "$P_SITE.$P_ENV" -- updatedb -y
@@ -36,16 +34,10 @@ terminus -n drush "$P_SITE.$P_ENV" -- cr
 echo "Importing config splits."
 # If config splits are available, import them.
 if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.yml" ] ; then
-  terminus -n drush "$P_SITE.$P_ENV" pm-enable config_split config_filter config_ignore -y
   if [[ "$P_SITE" == "path2purchase" ]]; then
     terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=../config/splits/_config_splits --partial --yes
   else
     terminus -n drush "$P_SITE.$P_ENV" -- config-import --source=config/splits/_config_splits --partial --yes
-  fi
-  if [[ "$P_ENV" == 'live' ]] && [ -f "config/splits/_config_splits/config_split.config_split.live.yml" ]; then
-    terminus -n drush "$P_SITE.$P_ENV" -- config-import --partial --source=config/splits/live -y
-    terminus -n drush "$P_SITE.$P_ENV" -- pm-enable s3fs -y
-    terminus -n drush "$P_SITE.$P_ENV" -- s3fs:refresh-cache
   fi
   terminus -n drush "$P_SITE.$P_ENV" -- cr
     # Partial split imports for PS
@@ -64,7 +56,6 @@ if [ -f "config/splits/_config_splits/config_split.config_split.config_splits.ym
     fi
   fi
 fi
-
 
 # If exported configuration is available, then import it.
 if [ -f "config/default/system.site.yml" ] ; then
