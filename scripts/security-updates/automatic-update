@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Exit on error
+set -e
+
+echo "Updating projects"
+DIR=$(pwd)
+COMPOSER_CMD=$(which composer)
+NOW=$(date +'%F')
+cd $DIR
+BRANCH_NAME="feature-security-update-$NOW"
+# Check if branch already exists
+echo "Checking if branch exists"
+if [[ `git ls-remote --head origin $BRANCH_NAME` ]]; then
+  # Branch already exists
+  while getopts ":y" option; do
+    case $option in
+      y)
+      echo "Switching to existing security update branch"
+      echo "Any changes will be appended"
+      git checkout $BRANCH_NAME
+      CHECKOUT_BRANCH=true
+      ;;
+    esac
+  done
+else
+  # Branch does not yet exist
+  echo "Create security update branch for $NOW"
+  echo "--------------------------------------"
+  cd $DIR
+  BRANCH_NAME="feature-security-update-$NOW"
+  git branch $BRANCH_NAME
+  CHECKOUT_BRANCH=true
+fi
+
+if [[ $CHECKOUT_BRANCH == true ]]; then
+  echo "Checkout security update branch"
+  git checkout $BRANCH_NAME
+else
+  echo "Branch already exists"
+  exit 1
+fi
+
+while read -r line
+do
+  PROJECT=$(echo $line | sed -e 's/\r//g')
+  echo "Updating $PROJECT"
+  echo "-----------------"
+  cd $DIR
+  $COMPOSER_CMD update $PROJECT --with-dependencies
+  echo "Updated $PROJECT"
+  echo "---------------"
+done
+echo "Projects updated"
+echo "---------------"
+
+# Check for any changes
+if [[ `git status --porcelain` ]]; then
+  cd $DIR
+  echo "Stage changes"
+  echo "-----------------------------"
+  git add -A
+  echo "Commit changes"
+  echo "------------------------------"
+  git commit -m "security update for $NOW"
+  echo "Push security update changes to remote repo"
+  echo "-------------------------------------------"
+  git push --set-upstream origin $BRANCH_NAME
+fi
