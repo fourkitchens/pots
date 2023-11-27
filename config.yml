@@ -626,7 +626,7 @@ commands:
             - run:
                 name: deploy to Pantheon
                 command: |
-                  if [ -f "./.circleci/scripts/deploy-to-live" ]; then
+                  if [ -f "./.circleci/scripts/deploy" ]; then
                     ./.circleci/scripts/deploy
                   else
                     ./vendor/fourkitchens/pots/scripts/pantheon/deploy
