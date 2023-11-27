@@ -101,6 +101,16 @@ DEV_SITE_BASIC_AUTH=${DEV_SITE_BASIC_AUTH:+"$DEV_SITE_BASIC_AUTH@"}
 TEST_SITE_BASIC_AUTH=${TEST_SITE_BASIC_AUTH:+"$TEST_SITE_BASIC_AUTH@"}
 LIVE_SITE_BASIC_AUTH=${LIVE_SITE_BASIC_AUTH:+"$LIVE_SITE_BASIC_AUTH@"}
 
+# Make old $SANATIZE_SCRIPT variable backwards compatible.
+if [[ ! -z "$SANATIZE_SCRIPT" ]] ; then
+  SANITIZE_SCRIPT="$SANATIZE_SCRIPT"
+  echo "WARNING:"
+  echo "The variable SANATIZE_SCRIPT is deprecated and will be removed in a future version of pots."
+  echo -e "Please use the corrected variable SANITIZE_SCRIPT instead.\n\n"
+elif [[ -z "$SANATIZE_SCRIPT" ]]; then
+  SANITIZE_SCRIPT="$SANITIZE_SCRIPT"
+fi
+
 # Prepare Variables that are shared on both acquia and pantheon
 if [[ ${HOST_VARIANT} == "pantheon" ]] ; then
   CANONICAL_ENV=${CANONICAL_ENV:-live}
@@ -146,6 +156,7 @@ fi
   echo "export DEV_SITE_URL='https://${DEV_SITE_BASIC_AUTH}dev-$TERMINUS_SITE.pantheonsite.io/'"
   echo "export TEST_SITE_URL='https://${TEST_SITE_BASIC_AUTH}test-$TERMINUS_SITE.pantheonsite.io/'"
   echo "export LIVE_SITE_URL='https://${LIVE_SITE_BASIC_AUTH}live-$TERMINUS_SITE.pantheonsite.io/'"
+  echo "export SANITIZE_SCRIPT='$SANITIZE_SCRIPT'"
   echo "export ARTIFACTS_DIR='artifacts'"
   echo "export ARTIFACTS_FULL_DIR='/tmp/artifacts'"
   echo "export CANONICAL_ENV='$CANONICAL_ENV'"

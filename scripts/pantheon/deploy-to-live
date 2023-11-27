@@ -2,7 +2,7 @@
 
 set -eo pipefail
 
-echo "Preparing to deploy to Producion"
+echo "Preparing to deploy to Production"
 
 # Authenticate with Terminus
 if [[ -z "$( terminus whoami )" ]]; then

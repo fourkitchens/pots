@@ -430,7 +430,7 @@ mandatory environment variables in this way as well.
    * Pantheon: dev, test, live
 
    Default: "prod" on Acquia. "live" on Pantheon
-* `SANATIZE_SCRIPT`: Script used to sanatize databases. Only used when
+* `SANITIZE_SCRIPT`: Script used to sanitize databases. Only used when
    `CANONICAL_ENV` is not dev. There is no default.
 * `SYNC_CONFIG`: The ability to turn configuration sync on or off. By default,
    Yes if Any directory in the ./config directory (inclusive) contains
