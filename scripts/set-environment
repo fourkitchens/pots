@@ -104,7 +104,9 @@ LIVE_SITE_BASIC_AUTH=${LIVE_SITE_BASIC_AUTH:+"$LIVE_SITE_BASIC_AUTH@"}
 # Make old $SANATIZE_SCRIPT variable backwards compatible.
 if [[ ! -z "$SANATIZE_SCRIPT" ]] ; then
   SANITIZE_SCRIPT="$SANATIZE_SCRIPT"
-  echo "WARNING: The variable SANATIZE_SCRIPT is deprecated and will be removed in a future version of pots. Please use the corrected variable SANITIZE_SCRIPT instead."
+  echo "WARNING:"
+  echo "The variable SANATIZE_SCRIPT is deprecated and will be removed in a future version of pots."
+  echo -e "Please use the corrected variable SANITIZE_SCRIPT instead.\n\n"
 elif [[ -z "$SANATIZE_SCRIPT" ]]; then
   SANITIZE_SCRIPT="$SANITIZE_SCRIPT"
 fi
