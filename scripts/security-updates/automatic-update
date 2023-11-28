@@ -28,7 +28,7 @@ else
   echo "Create security update branch for $NOW"
   echo "--------------------------------------"
   cd $DIR
-  BRANCH_NAME="feature-security-update-$NOW"
+  BRANCH_NAME="feature/automated-sec-update-$NOW"
   git branch $BRANCH_NAME
   CHECKOUT_BRANCH=true
 fi
@@ -48,22 +48,20 @@ do
   echo "-----------------"
   cd $DIR
   $COMPOSER_CMD update $PROJECT --with-dependencies
-  echo "Updated $PROJECT"
-  echo "---------------"
+  # Check for any changes
+  if [[ `git status --porcelain` ]]; then
+    #committing recent changes.
+    git add composer.*
+    git commit -m "AUTO-SEC: Updated project $PROJECT (Security update)"
+    echo "Updated $PROJECT"
+    echo "---------------"
+  fi
 done
 echo "Projects updated"
 echo "---------------"
 
 # Check for any changes
-if [[ `git status --porcelain` ]]; then
-  cd $DIR
-  echo "Stage changes"
-  echo "-----------------------------"
-  git add -A
-  echo "Commit changes"
-  echo "------------------------------"
-  git commit -m "security update for $NOW"
-  echo "Push security update changes to remote repo"
-  echo "-------------------------------------------"
-  git push --set-upstream origin $BRANCH_NAME
-fi
+cd $DIR
+echo "Pushing security update changes to remote repo"
+echo "-------------------------------------------"
+git push --set-upstream origin $BRANCH_NAME
