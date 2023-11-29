@@ -360,7 +360,7 @@ workflows:
   scheduled_update_check:
     triggers:
       - schedule:
-          cron: "0 23 * * *"
+          cron: "0 17 * * 3"
           filters:
             branches:
               only:
