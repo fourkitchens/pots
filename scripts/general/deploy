@@ -11,6 +11,7 @@ sed -i '1,/# :::::::::::::::::::::: cut ::::::::::::::::::::::/d' .gitignore
 # returns all files/dirs that are NOT dot (hidden). This protects our repos'
 # .git folder from being blown away.
 find ./* -type d | grep .git | xargs rm -rf
+find ./* -type f | grep .gitignore | xargs rm -rf
 
 # Remove unwanted gitignores here. Follow the example below.
 # Remove simplesamlphp .gitignore which would cause our config and metadata
