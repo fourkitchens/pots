@@ -2,10 +2,14 @@
 
 set -eo pipefail
 
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+
 echo "Starting environment deploy commmands."
-./vendor/bin/drush updb -y
+$DRUSH_CMD updb -y
 echo "Clearing Drupal cache."
-./vendor/bin/drush cr
+$DRUSH_CMD cr
 # If exported configuration is available, then import it.
 if [[ "$SYNC_CONFIG" != "NO" ]]; then
   if [ -f "./.circleci/scripts/drush-config-import" ]; then
