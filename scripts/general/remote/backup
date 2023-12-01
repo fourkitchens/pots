@@ -6,7 +6,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 REMOTE_ENV_NAME="$1"
 HOSTING_PATH="$2"
 BACKUP_DIRECTORY="$3"
-DRUSH_CMD="$3"
+DRUSH_CMD="$4"
 
 if [[ -z "$REMOTE_ENV_NAME" ]]; then
   echo "Argument 1: Remote Env Name is missing."
