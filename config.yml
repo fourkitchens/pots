@@ -316,6 +316,14 @@ jobs:
             else
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
+      - run:
+          name: Deploy to live
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-live" ]; then
+              ./.circleci/scripts/deploy-to-live
+            else
+              ./vendor/fourkitchens/pots/scripts/general/deploy-to-live
+            fi
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -429,8 +437,6 @@ workflows:
               ignore: /^deploy-.*$/
       - approve_deploy_to_live:
           type: approval
-          requires:
-            - deploy
           filters:
             branches:
               only:
