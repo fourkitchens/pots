@@ -27,7 +27,10 @@ fi
 echo "Moving to $HOSTING_PATH"
 cd "$HOSTING_PATH"
 
+
 if $DRUSH_CMD status | grep "Drupal version"; then
+  echo "Drush will be run as '$DRUSH_CMD'"
+else
   echo "$DRUSH_CMD is failing to bootstrap drupal. The build may not be complete. Aborting."
   exit 1;
 fi
