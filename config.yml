@@ -318,6 +318,9 @@ jobs:
       - run:
           name: Upgrade composer
           command: composer self-update
+      - checkout
+      - php/install-composer
+      - php/install-packages
       - run:
           name: setup-environment-vars
           command: |
@@ -328,7 +331,7 @@ jobs:
             fi
       - add_ssh_keys
       - run: terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
-      - run: terminus -n drush 4k-autosec."$CANONICAL_ENV" -- pm:security --field=name > ./.circleci/scripts/security-updates/projects_to_update.txt 2>/dev/null || true
+      - run: terminus -n drush "$SITE_NAME"."$CANONICAL_ENV" -- pm:security --field=name > ./.circleci/scripts/security-updates/projects_to_update.txt 2>/dev/null || true
       - run:
           name: Check security updates
           command: |
