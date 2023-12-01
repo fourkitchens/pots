@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+if [[ -z "$DOCROOT" ]]; then
+  DOCROOT=web
+fi
+
+if [[ -z "$REMOTE_PROJECT_ROOT" ]]; then
+  echo 'You must define $REMOTE_PROJECT_ROOT as an evnvironment variable.'
+  exit 1;
+fi
+if [[ -z "$SSH_COMMAND_LIVE" ]]; then
+  echo 'You must define $SSH_COMMAND_LIVE as an evnvironment variable.'
+  exit 1;
+fi
+if [[ -z "$DEPLOY_BRANCH" ]]; then
+  DEPLOY_BRANCH="$CI_BRANCH"
+fi
+
+if [[ -z "$BACKUP_SCRIPT_PATH" ]]; then
+  BACKUP_SCRIPT_PATH="$SCRIPT_DIR/remote/backup"
+fi
+if [[ -z "$DEPLOY_SCRIPT_PATH" ]]; then
+  DEPLOY_SCRIPT_PATH="$SCRIPT_DIR/remote/remote_deploy"
+fi
+if [[ -z "$REMOTE_BACKUP_DIRECTORY" ]]; then
+  REMOTE_BACKUP_DIRECTORY="$REMOTE_PROJECT_ROOT/backups"
+fi
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+if [[ -z "$SYNC_CONIG" ]]; then
+  SYNC_CONFIG="YES"
+fi
+
+$SSH_COMMAND_LIVE "bash -s " < "$BACKUP_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$DRUSH_CMD";
+$SSH_COMMAND_LIVE "bash -s " < "$DEPLOY_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$DEPLOY_BRANCH" "$DOCROOT" "$DRUSH_CMD" "$SYNC_CONFIG";

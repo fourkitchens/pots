@@ -1,0 +1,24 @@
+#!/bin/bash
+
+set -eo pipefail
+
+echo "Starting environment deploy commmands."
+./vendor/bin/drush updb -y
+echo "Clearing Drupal cache."
+./vendor/bin/drush cr
+# If exported configuration is available, then import it.
+if [[ "$SYNC_CONFIG" != "NO" ]]; then
+  if [ -f "./.circleci/scripts/drush-config-import" ]; then
+    ./.circleci/scripts/drush-config-import
+  else
+    "$( dirname $0 )/drush-config-import"
+  fi
+else
+  echo "SYNC_CONFIG is set to 'NO'. Leaving configuration alone."
+fi
+
+# We make the assummption that this script is being run from the project root.
+# Allow for post deployment hooks.
+if [ -f "./.circleci/scripts/post-drush-commands" ]; then
+  ./.circleci/scripts/post-drush-commands
+fi

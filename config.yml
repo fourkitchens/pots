@@ -304,6 +304,18 @@ jobs:
       - deploy-to-pantheon-env:
           environment: 'live'
 
+  deploy_to_live_general:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -380,8 +392,7 @@ workflows:
                 - 'master'
   build-deploy-acquia:
     when:
-      not:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      equal: [ acquia, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -389,13 +400,50 @@ workflows:
           requires:
             - static_tests
             - build
+      - release:
+          requires:
+          - deploy
           filters:
             branches:
               only:
-                - main
-                - master
-                - develop
-                - /release-.*/
+                - 'main'
+                - 'master'
+  build-deploy-general:
+    when:
+      equal: [ general, << pipeline.parameters.host-variant >> ]
+    jobs:
+      - static_tests:
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - build:
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - deploy:
+          requires:
+            - static_tests
+            - build
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - approve_deploy_to_live:
+          type: approval
+          requires:
+            - deploy
+          filters:
+            branches:
+              only:
+                - 'deploy-main'
+                - 'deploy-master'
+      - deploy_to_live_general:
+          requires:
+            - approve_deploy_to_live
+          filters:
+            branches:
+              only:
+                - 'deploy-main'
+                - 'deploy-master'
       - release:
           requires:
           - deploy
