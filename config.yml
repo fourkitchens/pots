@@ -331,14 +331,14 @@ jobs:
             fi
       - add_ssh_keys
       - run: terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
-      - run: terminus -n drush "$SITE_NAME"."$CANONICAL_ENV" -- pm:security --field=name > ./.circleci/scripts/security-updates/projects_to_update.txt 2>/dev/null || true
+      - run: terminus -n drush "$SITE_NAME"."$CANONICAL_ENV" -- pm:security --field=name > /tmp/projects_to_update.txt 2>/dev/null || true
       - run:
           name: Check security updates
           command: |
               git config --global user.email "bender@fourkitchens.com"
               git config --global user.name "CI Bot"
               echo "Starting script"
-              cat ./.circleci/scripts/security-updates/projects_to_update.txt | ./.circleci/scripts/security-updates/automatic-update
+              cat /tmp/projects_to_update.txt | ./.circleci/scripts/security-updates/automatic-update
               echo "Script done"
 
   # Run this on one of the main branches to push a release back to github.
