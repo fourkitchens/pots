@@ -185,7 +185,7 @@ get to Circle's Project Settings"
 
 1. In a new browser instance, log in to GitHub as the Deploy Bot.
 2. Follow the instructions for [creating a personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token#creating-a-token)
-3. Choose just repo:status, repo_deployment and public_repo for scopes
+3. Choose the complete repo access option.
 4. Save the access token securely, so you will have access to it. It will only
    be displayed once.
 
@@ -300,6 +300,18 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
 12. Copy the Acquia site id into "Value".
     **TODO:** FLESH THIS OUT MORE WITH HELP ON HOW TO GET IT
 13. Click "Add Environment Variable" to accept the changes.
+14. Click "Add Environment Variable".
+15. Type "ZD_REQUESTER_ID" in the name.
+16. Type Client requester id into "Value". The user ID can be obtained from the user's url. e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
+17. Click "Add Environment Variable" to accept the changes.
+18. Click "Add Environment Variable".
+19. Type "ZD_TOKEN" in the name.
+20. Type Zendesk token value id into "Value". This token is stored into 1password.
+21. Click "Add Environment Variable" to accept the changes.
+22. Click "Add Environment Variable".
+23. Type "ZD_LEAD_EMAIL" in the name.
+24. Type Project lead email value id into "Value". The projects lead email.
+25. Click "Add Environment Variable" to accept the changes.
 
 ## Configure CircleCI config.yml
 There are many options you have, some shared, and some hosting specific.
@@ -466,7 +478,7 @@ mandatory environment variables in this way as well.
    `sitename@svn-21939.prod.hosting.acquia.com:sitename.git`.
 * `ACQUIA_REALM`: **Mandatory** The Acquia Cloud API Realm.
    Usually "prod" or "devcloud".
-   See [documentation](https://docs.acquia.com/acquia-cloud/api#realm). 
+   See [documentation](https://docs.acquia.com/acquia-cloud/api#realm).
    Defaults to `prod`.
 
 ## Helper Environment Variables
