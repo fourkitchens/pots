@@ -181,5 +181,5 @@ else
     -d "$ZD_JSON_DATA"
 
   echo "Zendesk Ticket successfully created."
-  echo "-------------------------------------------
+  echo "-------------------------------------------"
 fi
