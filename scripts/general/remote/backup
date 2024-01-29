@@ -43,6 +43,10 @@ if [[ -f ./vendor/bin/drush ]]; then
   BACKUP_FILE="$BACKUP_DIRECTORY/$REMOTE_ENV_NAME-$( date +"%F_%T" ).sql.gz"
   echo "Backing up DB for $HOSTING_PATH at $BACKUP_FILE"
   ./vendor/bin/drush sql:dump --structure-tables-list=cache,cache_*  --extra-dump=--no-tablespaces | gzip > "$BACKUP_FILE"
+  if [ -f "$BACKUP_DIRECTORY/newest.sql.gz" ]; then
+    rm "$BACKUP_DIRECTORY/newest.sql.gz"
+  fi
+  ln -s "$BACKUP_FILE" "$BACKUP_DIRECTORY/newest.sql.gz"
 else
   echo "./vendor/bin/drush doesn't exist. Must be the first time a deployment has ever happened."
 fi
