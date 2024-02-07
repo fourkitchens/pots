@@ -63,6 +63,7 @@ for package_name in $(echo "$advisories" | jq -r 'keys | @sh'); do
       # Building PR information.
       # Remove prefix "drupal/" from the project name
       AUX=${PROJECT//drupal\//''}
+      ZD_PROJECTS_UPDATED+="${AUX}, "
       if [ $AUX == 'core' ]; then
         AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
       else
