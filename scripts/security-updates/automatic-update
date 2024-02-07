@@ -43,12 +43,12 @@ fi
 MESSAGE=""
 ZD_PROJECTS_UPDATED=""
 # 1. Load the JSON data in a variable.
-json_data=$(jq -r)
+JSON_DATA=$(jq -r)
 # 2. Use jq to parse the JSON and extract the "advisories" object.
-advisories=$(echo "$json_data" | jq '.advisories')
+ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
 # 3. Loop through each key-value pair in the "advisories" object.
-for package_name in $(echo "$advisories" | jq -r 'keys | @sh'); do
-  PROJECT=$(echo $package_name | tr -d "'")
+for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
+  PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
   if [[ "${PROJECT}" == drupal* ]]; then
     echo "Updating $PROJECT"
     echo "-----------------"
