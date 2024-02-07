@@ -42,31 +42,36 @@ fi
 
 MESSAGE=""
 ZD_PROJECTS_UPDATED=""
-while read -r line
-do
-  PROJECT=$(echo $line | sed -e 's/\r//g')
-  echo "Updating $PROJECT"
-  echo "-----------------"
-  cd $DIR
-  $COMPOSER_CMD update $PROJECT --with-dependencies
-  # Check for any changes
-  if [[ `git status --porcelain` ]]; then
-    #committing recent changes.
-    git add composer.*
-    git commit -m "(AUTO-SEC): Updated project $PROJECT (Security update)"
+# 1. Load the JSON data in a variable.
+json_data=$(jq -r)
+# 2. Use jq to parse the JSON and extract the "advisories" object.
+advisories=$(echo "$json_data" | jq '.advisories')
+# 3. Loop through each key-value pair in the "advisories" object.
+for package_name in $(echo "$advisories" | jq -r 'keys | @sh'); do
+  PROJECT=$(echo $package_name | tr -d "'")
+  if [[ "${PROJECT}" == drupal* ]]; then
+    echo "Updating $PROJECT"
+    echo "-----------------"
+    cd $DIR
+    $COMPOSER_CMD update $PROJECT --with-dependencies
+    # Check for any changes
+    if [[ `git status --porcelain` ]]; then
+      #committing recent changes.
+      git add composer.*
+      git commit -m "(AUTO-SEC): Updated project $PROJECT (Security update)"
 
-    # Building PR information.
-    # Remove prefix "drupal/" from the project name
-    AUX=${PROJECT//drupal\//''}
-    ZD_PROJECTS_UPDATED+="${AUX}, "
-    if [ $AUX == 'core' ]; then
-      AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
-    else
-      AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
+      # Building PR information.
+      # Remove prefix "drupal/" from the project name
+      AUX=${PROJECT//drupal\//''}
+      if [ $AUX == 'core' ]; then
+        AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
+      else
+        AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
+      fi
+      MESSAGE="${MESSAGE}${SEPARATOR}${AUX}"
+      echo "Updated $PROJECT"
+      echo "---------------"
     fi
-    MESSAGE+="${AUX}"
-    echo "Updated $PROJECT"
-    echo "---------------"
   fi
 done
 echo "Projects updated"
