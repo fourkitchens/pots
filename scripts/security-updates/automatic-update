@@ -69,7 +69,7 @@ for package_name in $(echo "$advisories" | jq -r 'keys | @sh'); do
       else
         AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
       fi
-      MESSAGE="${MESSAGE}${SEPARATOR}${AUX}"
+      MESSAGE+="${AUX}\n"
       echo "Updated $PROJECT"
       echo "---------------"
     fi
