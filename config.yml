@@ -6,14 +6,12 @@ version: 2.1
 # by project basis.
 parameters:
 
-
   run-sec-updates-check:
     description: "use to trigger the Autosec process"
     type: boolean
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
-
   php-version:
     description: major.minor version number for php version to use.
     type: string
@@ -387,7 +385,9 @@ workflows:
 
   build-deploy-pantheon:
     when:
-      equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      and:
+      - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
     jobs:
       - static_tests
       - build
