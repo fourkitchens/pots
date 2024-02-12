@@ -5,6 +5,15 @@ version: 2.1
 # defaults here for any permanent configuration you need to do on a project
 # by project basis.
 parameters:
+
+
+  run-sec-updates-check:
+    description: "use to trigger the Autosec process"
+    type: boolean
+    default: false
+    # The value for this variable will be set using a External POST request
+    # To trigger the Automatic security updates check.
+
   php-version:
     description: major.minor version number for php version to use.
     type: string
@@ -360,17 +369,9 @@ jobs:
 
 workflows:
   version: 2
+
   scheduled_update_check:
-    triggers:
-      - schedule:
-          cron: "0 22 * * 3"
-          filters:
-            branches:
-              only:
-                - feat/create-scheduled-job-circleci
-                - main
-                - master
-                # Or you can use "master" depending on your configuration
+    when: << pipeline.parameters.run-sec-updates-check >>
     jobs:
       - static_tests
       - build
@@ -378,6 +379,12 @@ workflows:
           requires:
             - static_tests
             - build
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+
   build-deploy-pantheon:
     when:
       equal: [ pantheon, << pipeline.parameters.host-variant >> ]
