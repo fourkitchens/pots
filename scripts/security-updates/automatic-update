@@ -9,183 +9,202 @@ COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
 cd $DIR
 BRANCH_NAME="feature/automated-sec-update-$NOW"
-# Check if branch already exists
-echo "Checking if branch exists"
-if [[ `git ls-remote --head origin $BRANCH_NAME` ]]; then
-  # Branch already exists
-  while getopts ":y" option; do
-    case $option in
-      y)
-      echo "Switching to existing security update branch"
-      echo "Any changes will be appended"
-      git checkout $BRANCH_NAME
-      CHECKOUT_BRANCH=true
-      ;;
-    esac
-  done
-else
-  # Branch does not yet exist
-  echo "Create security update branch for $NOW"
-  echo "--------------------------------------"
-  cd $DIR
-  git branch $BRANCH_NAME
-  CHECKOUT_BRANCH=true
-fi
-
-if [[ $CHECKOUT_BRANCH == true ]]; then
-  echo "Checkout security update branch"
-  git checkout $BRANCH_NAME
-else
-  echo "Branch already exists"
-  exit 1
-fi
-
-MESSAGE=""
-ZD_PROJECTS_UPDATED=""
 # 1. Load the JSON data in a variable.
 JSON_DATA=$(jq -r)
 # 2. Use jq to parse the JSON and extract the "advisories" object.
 ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
-# 3. Loop through each key-value pair in the "advisories" object.
-for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
-  PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
-  if [[ "${PROJECT}" == drupal* ]]; then
-    echo "Updating $PROJECT"
-    echo "-----------------"
-    cd $DIR
-    $COMPOSER_CMD update $PROJECT --with-dependencies
-    # Check for any changes
-    if [[ `git status --porcelain` ]]; then
-      #committing recent changes.
-      git add composer.*
-      git commit -m "(AUTO-SEC): Updated project $PROJECT (Security update)"
+MESSAGE=""
+ZD_PROJECTS_UPDATED=""
 
-      # Building PR information.
-      # Remove prefix "drupal/" from the project name
-      AUX=${PROJECT//drupal\//''}
-      ZD_PROJECTS_UPDATED+="${AUX}, "
-      if [ $AUX == 'core' ]; then
-        AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
-      else
-        AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
+
+# Helper function to check if branch exist on remote repository.
+function gh_branch_exist () {
+
+# Check if branch already exists
+  if [[ `git ls-remote --head origin $BRANCH_NAME` ]]; then
+    echo "true"
+    exit 1
+  else
+    # Branch does not yet exist
+    echo "false"
+  fi
+}
+
+# Creates a Git branch.
+function create_gh_branch () {
+  # Create security update branch for $NOW
+  cd $DIR
+  git branch $BRANCH_NAME
+  git checkout $BRANCH_NAME
+  echo "true"
+}
+
+# Helper function to check if there are avaiable sec update to apply.
+function security_updates_available () {
+  # 3. Loop through each key-value pair in the "advisories" object.
+  AVAILABLE_UPDATE="false"
+  for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
+    PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
+     if [[ "${PROJECT}" == drupal* ]]; then
+       AVAILABLE_UPDATE="true"
+       break
+     fi
+  done
+  echo $AVAILABLE_UPDATE
+}
+
+
+ # Checking there pending sec updates.
+if [[ $(security_updates_available) == "true" ]]; then
+  echo "There are available security updates, starting automatic update process..."
+  if [[ $(gh_branch_exist) == "false" ]]
+  then
+    echo "Creating Git branch for the sec update..."
+    create_gh_branch
+    echo "Git branch created."
+  fi
+
+  # Loop through each key-value pair in the "advisories" object.
+  for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
+    PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
+    if [[ "${PROJECT}" == drupal* ]]; then
+      echo "Updating $PROJECT"
+      echo "-----------------"
+      cd $DIR
+      $COMPOSER_CMD update $PROJECT --with-dependencies
+      # Check for any changes
+      if [[ `git status --porcelain` ]]; then
+        #committing recent changes.
+        git add composer.*
+        git commit -m "(AUTO-SEC): Updated project $PROJECT (Security update)"
+
+        # Building PR information.
+        # Remove prefix "drupal/" from the project name
+        AUX=${PROJECT//drupal\//''}
+        ZD_PROJECTS_UPDATED+="${AUX}, "
+        if [ $AUX == 'core' ]; then
+          AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
+        else
+          AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
+        fi
+        MESSAGE+="${AUX}\n"
+        echo "Updated $PROJECT"
+        echo "---------------"
       fi
-      MESSAGE+="${AUX}\n"
-      echo "Updated $PROJECT"
-      echo "---------------"
     fi
-  fi
-done
-echo "Projects updated"
-echo "---------------"
+  done
+  echo "Projects updated"
+  echo "---------------"
 
-# Check for any changes
-cd $DIR
-echo "Pushing security update changes to remote repo"
-echo "-------------------------------------------"
-git push --set-upstream origin $BRANCH_NAME
-
-# Create the PR and ticket.
-if [ -z "$MESSAGE" ]
-then
-  echo "Nothing to update."
-else
-  echo "Creating security updates Pull request."
+  # Check for any changes
+  cd $DIR
+  echo "Pushing security update changes to remote repo"
   echo "-------------------------------------------"
-  # Preparing variables
-  TITLE="(AUTO-SEC): Security updates for $NOW"
-  BODY=`cat ./vendor/fourkitchens/pots/scripts/security-updates/PULL_REQUEST_TEMPLATE.md`
-  BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
-  if [ ! -z "$SITE_NAME" ]; then
-    BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
-  fi
-  PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
+  git push --set-upstream origin $BRANCH_NAME
 
-  # Running the request
-  curl -o /dev/null -L \
-  -X POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls \
-  -d "$PARAMETERS"
+  # Create the PR and ticket.
+  if [ -z "$MESSAGE" ]
+  then
+    echo "Nothing to update."
+  else
+    echo "Creating security updates Pull request."
+    echo "-------------------------------------------"
+    # Preparing variables
+    TITLE="(AUTO-SEC): Security updates for $NOW"
+    BODY=`cat ./vendor/fourkitchens/pots/scripts/security-updates/PULL_REQUEST_TEMPLATE.md`
+    BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
+    if [ ! -z "$SITE_NAME" ]; then
+      BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
+    fi
+    PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
 
-  echo "Pull request: $TITLE successfully created."
-  echo "-------------------------------------------"
-
-  echo "Creating security updates Zendesk Ticket."
-  echo "-------------------------------------------"
-  ZD_API=https://advomatic.zendesk.com/api/v2
-  # Hardcode Requester ID.
-  # To get this project's Requester ID from Zendesk:
-  # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
-  # 2. Search for the user you need the requester ID for.
-  # 3. The user ID can be obtained from the user's url.
-  #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-  #   e.g. Requester ID: 378771022972
-  # 4. Replace the value below.
-  # ZD_REQUESTER_ID : Env varible, should be define into the CircleCI variables, User into the client Org.
-  # ZD_TOKEN: Env varible, should be define into the CircleCI variables, you could find it into 1password
-  # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
-  # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
-
-  ZD_BODY_MESSAGE=`cat ./.circleci/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
-  # Replacing placehoders into the template.
-  ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-  ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
-  # Scaping new lines characters.
-  ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
-  ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
-  ZD_JSON_DATA=$(printf '{
-                          "ticket": {
-                            "subject": "%s" ,
-                            "requester_id": "%s",
-                            "group_id": 360007800612,
-                            "priority": "high",
-                            "type": "task",
-                            "status": "new",
-                            "tags": [
-                              "security-updates"
-                            ],
-                            "comment": {
-                              "body": "%s"
-                            },
-                            "custom_fields": [
-                              {
-                                "id": 360002688411,
-                                "value": null
-                              },
-                              {
-                                "id": 360027138451,
-                                "value": null
-                              },
-                              {
-                                "id": 22966000,
-                                "value": "Updates regarding security releases are completed."
-                              },
-                              {
-                                "id": 24204016,
-                                "value": "Perform auto updates for security release."
-                              },
-                              {
-                                "id": 22966010,
-                                "value": null
-                              },
-                              {
-                                "id": 360048728091,
-                                "value": false
-                              }
-                            ]
-                          }
-                        }' "$ZD_TICKET_TITLE" "$ZD_REQUESTER_ID" "$ZD_BODY_MESSAGE")
-
-  # Encoding ZD token.
-  ZD_AUTH=$(echo -n "${ZD_LEAD_EMAIL}/token:${ZD_TOKEN}" | openssl enc -A -base64)
-  curl ${ZD_API}/tickets \
+    # Running the request
+    curl -o /dev/null -L \
     -X POST \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Basic ${ZD_AUTH}" \
-    -d "$ZD_JSON_DATA"
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer $GITHUB_TOKEN" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls \
+    -d "$PARAMETERS"
 
-  echo "Zendesk Ticket successfully created."
-  echo "-------------------------------------------"
+    echo "Pull request: $TITLE successfully created."
+    echo "-------------------------------------------"
+
+    echo "Creating security updates Zendesk Ticket."
+    echo "-------------------------------------------"
+    ZD_API=https://advomatic.zendesk.com/api/v2
+    # Hardcode Requester ID.
+    # To get this project's Requester ID from Zendesk:
+    # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
+    # 2. Search for the user you need the requester ID for.
+    # 3. The user ID can be obtained from the user's url.
+    #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
+    #   e.g. Requester ID: 378771022972
+    # 4. Replace the value below.
+    # ZD_REQUESTER_ID : Env varible, should be define into the CircleCI variables, User into the client Org.
+    # ZD_TOKEN: Env varible, should be define into the CircleCI variables, you could find it into 1password
+    # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
+    # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
+
+    ZD_BODY_MESSAGE=`cat ./.circleci/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
+    # Replacing placehoders into the template.
+    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
+    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
+    # Scaping new lines characters.
+    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
+    ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+    ZD_JSON_DATA=$(printf '{
+                            "ticket": {
+                              "subject": "%s" ,
+                              "requester_id": "%s",
+                              "group_id": 360007800612,
+                              "priority": "high",
+                              "type": "task",
+                              "status": "new",
+                              "tags": [
+                                "security-updates"
+                              ],
+                              "comment": {
+                                "body": "%s"
+                              },
+                              "custom_fields": [
+                                {
+                                  "id": 360002688411,
+                                  "value": null
+                                },
+                                {
+                                  "id": 360027138451,
+                                  "value": null
+                                },
+                                {
+                                  "id": 22966000,
+                                  "value": "Updates regarding security releases are completed."
+                                },
+                                {
+                                  "id": 24204016,
+                                  "value": "Perform auto updates for security release."
+                                },
+                                {
+                                  "id": 22966010,
+                                  "value": null
+                                },
+                                {
+                                  "id": 360048728091,
+                                  "value": false
+                                }
+                              ]
+                            }
+                          }' "$ZD_TICKET_TITLE" "$ZD_REQUESTER_ID" "$ZD_BODY_MESSAGE")
+
+    # Encoding ZD token.
+    ZD_AUTH=$(echo -n "${ZD_LEAD_EMAIL}/token:${ZD_TOKEN}" | openssl enc -A -base64)
+    curl ${ZD_API}/tickets \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Basic ${ZD_AUTH}" \
+      -d "$ZD_JSON_DATA"
+
+    echo "Zendesk Ticket successfully created."
+    echo "-------------------------------------------"
+  fi
 fi
