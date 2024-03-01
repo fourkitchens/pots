@@ -207,4 +207,6 @@ if [[ $(security_updates_available) == "true" ]]; then
     echo "Zendesk Ticket successfully created."
     echo "-------------------------------------------"
   fi
+else
+  echo "Nothing to do, None available sec updates."
 fi
