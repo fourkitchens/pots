@@ -345,7 +345,7 @@ jobs:
               git config --global user.email "bender@fourkitchens.com"
               git config --global user.name "CI Bot"
               echo "Starting script"
-              cat /tmp/projects_to_update.json | ./.circleci/scripts/security-updates/automatic-update
+              cat /tmp/projects_to_update.json | ./vendor/fourkitchens/pots/scripts/security-updates/automatic-update
               echo "Script done"
 
   # Run this on one of the main branches to push a release back to github.

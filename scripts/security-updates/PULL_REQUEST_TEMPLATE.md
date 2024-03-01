@@ -11,6 +11,7 @@ https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/
 - [ ] Checkout this branch
 - [ ] Run `gulp run -t rebuild`
 - [ ] Navigate to [page](https://pr-[PR-NUMBER]-[PROJECT].pantheonsite.io/) and verify...
+[ADDITIONAL_TESTING]
 
 ### Notes:
 _Additional notes_

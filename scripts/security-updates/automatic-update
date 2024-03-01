@@ -4,6 +4,7 @@
 set -e
 
 echo "Updating projects"
+source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
@@ -88,6 +89,12 @@ if [[ $(security_updates_available) == "true" ]]; then
           AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
         fi
         MESSAGE+="${AUX}\n"
+         # IA Genereted Testing steps.
+        if [ -n "${OPENAI_API_KEY}" ]; then
+          PROMPT_TEXT="I am updating the following drupal project: $PROJECT because a security update, could you give me functional teststing instructions for it?"
+          OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT")
+          TEST_STEPS+= "IA testing instructions for the project ${$PROJECT}:\n"
+          TEST_STEPS+="${OPENAI_RESPONSE}\n"
         echo "Updated $PROJECT"
         echo "---------------"
       fi
@@ -115,6 +122,7 @@ if [[ $(security_updates_available) == "true" ]]; then
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
     if [ ! -z "$SITE_NAME" ]; then
       BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
+      BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
     fi
     PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
 
