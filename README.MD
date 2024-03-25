@@ -46,6 +46,7 @@ a hosted site on something like Acquia.
    + [Pantheon Specific Scripts](#pantheon-specific-scripts)
 * [Configure AutoSec](#configure-autosec)
    + [Steps to set the keys](#steps-to-set-the-keys)
+   + [Steps to set IA key](#steps-to-set-ia-key)
 
 ## Upgrading
 
@@ -560,3 +561,16 @@ With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, b
 1. The keys must be generated, either with a command in the console through [this guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) or they can also be generated through [1password](https://developer.1password.com/docs/ssh/manage-keys/).
 2. Add the private key to CircleCI: ` Project Settings -> SSH keys -> Additional SSH Keys `.
 3. Add the public key to GitHub: ` Project Settings -> Deploy Keys `.
+
+### Steps to set IA key
+
+AutoSec has been developed to use IA and obtain some functional tests of the packages it updates automatically. These steps are added to the PR documentation, thus providing important information to the developer performing the tests.
+
+The AI implementation was carried out through the ChatGPT API, therefore, a key is required to be generated and added to CircleCI. It is important to say that the use of this key has a cost for each request, so the configuration of said key is totally optional, the system is made to check if a key exists, it asks ChatGPT for the steps and if it doesn't have the key configured, it doesn't do any request.
+
+1. Generate a new API Key, navigate to [OpenIA](https://platform.openai.com/login?launch) page and login, select the API console.
+2. Navigate to "API Keys" in the left sidebar (hover on OpenIA logo).
+3. Click the "Create new secret key" button and copy the hash code.
+4. Add the API Key to CircleCI, navigate: ` Project Settings -> SSH keys -> Environment Variables `.
+5. Click the "Add Environment Variable" button.
+6. The variable name must to be: `OPENAI_API_KEY`, and the value paste the hash code of the step 3.
