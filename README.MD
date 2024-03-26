@@ -44,6 +44,9 @@ a hosted site on something like Acquia.
 * [Configure Composer.json](#configure-composerjson)
 * [Configure Scripts](#configure-scripts)
    + [Pantheon Specific Scripts](#pantheon-specific-scripts)
+* [Automatic security Updates](#automatic-security-updates)
+   + [Steps to set the keys](#steps-to-set-the-keys)
+   + [Steps to set IA key](#steps-to-set-ia-key)
 
 ## Upgrading
 
@@ -546,3 +549,43 @@ The scripts available for overload are as follows:
 - `deploy-to-live`: Provides the deployment logic to get changes to the
    production environment. By default, this provides backup services, the
    "deploy" services as well as a standard deploy.
+
+## Automatic Security Updates.
+
+POTS contains steps and scripts to automatically look for security updates and install them into the different contributed projects.
+
+This was build making use of CircleCI PipeLine parameters to trigger the CI job that run that scripts that checks and gets the secutity updates.
+
+To make it trigger recluntly we have a couple of options:
+
+- Evercurrent (Recommended)
+- CircleCi triggers interface
+
+
+To make the Automatic security updates works for our project, we will require to follow the next steps:
+
+- Create a new set of SSH keys to be able to push the changes back to github (github deploy key)
+- Configure the Zendesk integration (Environment variables - already documented at the top)
+- (Optional) Configure the the IA integration (Open IA)
+
+### Steps to set the keys
+When continuous integration is configured on a project, CircleCI generates a set of SSH keys and automatically adds the private key to CircleCI and the public key to GitHub. This way CircleCI will have access to the repository in GitHub, but this access is just read-only. Originally for POTS this access is enough since it only needs reading the repository on GitHub and writing on the platform where the website is hosted (Acquia, Pantheon, Platform, etc).
+
+With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, because AutoSec requires reading the repository, executing the security updates, and sending the changes to GitHub, therefore starting with AutoSec it is necessary to have read/write keys. CircleCI cannot generate keys with write access, therefore it is necessary to externally create a set of SSH keys and manually add them to both CircleCI and GitHub.
+
+1. The keys must be generated, either with a command in the console through [this guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) or they can also be generated through [1password](https://developer.1password.com/docs/ssh/manage-keys/).
+2. Add the private key to CircleCI: ` Project Settings -> SSH keys -> Additional SSH Keys `.
+3. Add the public key to GitHub: ` Project Settings -> Deploy Keys `.
+
+### Steps to set IA key
+
+AutoSec has been developed to use IA and obtain some functional tests of the packages it updates automatically. These steps are added to the PR documentation, thus providing important information to the developer performing the tests.
+
+The AI implementation was carried out through the ChatGPT API, therefore, a key is required to be generated and added to CircleCI. It is important to say that the use of this key has a cost for each request, so the configuration of said key is totally optional, the system is made to check if a key exists, it asks ChatGPT for the steps and if it doesn't have the key configured, it doesn't do any request.
+
+1. Generate a new API Key, navigate to [OpenIA](https://platform.openai.com/login?launch) page and login, select the API console.
+2. Navigate to "API Keys" in the left sidebar (hover on OpenIA logo).
+3. Click the "Create new secret key" button and copy the hash code.
+4. Add the API Key to CircleCI, navigate: ` Project Settings -> SSH keys -> Environment Variables `.
+5. Click the "Add Environment Variable" button.
+6. The variable name must to be: `OPENAI_API_KEY`, and the value paste the hash code of the step 3.
