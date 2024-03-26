@@ -149,84 +149,84 @@ if [[ $(security_updates_available) == "true" ]]; then
       exit 1
     fi
 
+    if [ -n "${ZD_REQUESTER_ID}" -a -n "${ZD_TOKEN}" -a -n "${ZD_LEAD_EMAIL}" ]; then
+      echo "Creating security updates Zendesk Ticket."
+      echo "-------------------------------------------"
+      ZD_API=https://advomatic.zendesk.com/api/v2
+      # Hardcode Requester ID.
+      # To get this project's Requester ID from Zendesk:
+      # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
+      # 2. Search for the user you need the requester ID for.
+      # 3. The user ID can be obtained from the user's url.
+      #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
+      #   e.g. Requester ID: 378771022972
+      # 4. Replace the value below.
+      # ZD_REQUESTER_ID : Env varible, should be define into the CircleCI variables, User into the client Org.
+      # ZD_TOKEN: Env varible, should be define into the CircleCI variables, you could find it into 1password
+      # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
+      # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
 
+      ZD_BODY_MESSAGE=`cat ./.circleci/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
+      # Replacing placehoders into the template.
+      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
+      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
+      # Scaping new lines characters.
+      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
+      ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+      ZD_JSON_DATA=$(printf '{
+                              "ticket": {
+                                "subject": "%s" ,
+                                "requester_id": "%s",
+                                "group_id": 360007800612,
+                                "priority": "high",
+                                "type": "task",
+                                "status": "new",
+                                "tags": [
+                                  "security-updates"
+                                ],
+                                "comment": {
+                                  "body": "%s"
+                                },
+                                "custom_fields": [
+                                  {
+                                    "id": 360002688411,
+                                    "value": null
+                                  },
+                                  {
+                                    "id": 360027138451,
+                                    "value": null
+                                  },
+                                  {
+                                    "id": 22966000,
+                                    "value": "Updates regarding security releases are completed."
+                                  },
+                                  {
+                                    "id": 24204016,
+                                    "value": "Perform auto updates for security release."
+                                  },
+                                  {
+                                    "id": 22966010,
+                                    "value": null
+                                  },
+                                  {
+                                    "id": 360048728091,
+                                    "value": false
+                                  }
+                                ]
+                              }
+                            }' "$ZD_TICKET_TITLE" "$ZD_REQUESTER_ID" "$ZD_BODY_MESSAGE")
 
-    echo "Creating security updates Zendesk Ticket."
-    echo "-------------------------------------------"
-    ZD_API=https://advomatic.zendesk.com/api/v2
-    # Hardcode Requester ID.
-    # To get this project's Requester ID from Zendesk:
-    # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
-    # 2. Search for the user you need the requester ID for.
-    # 3. The user ID can be obtained from the user's url.
-    #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-    #   e.g. Requester ID: 378771022972
-    # 4. Replace the value below.
-    # ZD_REQUESTER_ID : Env varible, should be define into the CircleCI variables, User into the client Org.
-    # ZD_TOKEN: Env varible, should be define into the CircleCI variables, you could find it into 1password
-    # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
-    # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
+        # Encoding ZD token.
+        ZD_AUTH=$(echo -n "${ZD_LEAD_EMAIL}/token:${ZD_TOKEN}" | openssl enc -A -base64)
+        curl ${ZD_API}/tickets \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Basic ${ZD_AUTH}" \
+          -d "$ZD_JSON_DATA"
 
-    ZD_BODY_MESSAGE=`cat ./.circleci/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
-    # Replacing placehoders into the template.
-    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
-    # Scaping new lines characters.
-    ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
-    ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
-    ZD_JSON_DATA=$(printf '{
-                            "ticket": {
-                              "subject": "%s" ,
-                              "requester_id": "%s",
-                              "group_id": 360007800612,
-                              "priority": "high",
-                              "type": "task",
-                              "status": "new",
-                              "tags": [
-                                "security-updates"
-                              ],
-                              "comment": {
-                                "body": "%s"
-                              },
-                              "custom_fields": [
-                                {
-                                  "id": 360002688411,
-                                  "value": null
-                                },
-                                {
-                                  "id": 360027138451,
-                                  "value": null
-                                },
-                                {
-                                  "id": 22966000,
-                                  "value": "Updates regarding security releases are completed."
-                                },
-                                {
-                                  "id": 24204016,
-                                  "value": "Perform auto updates for security release."
-                                },
-                                {
-                                  "id": 22966010,
-                                  "value": null
-                                },
-                                {
-                                  "id": 360048728091,
-                                  "value": false
-                                }
-                              ]
-                            }
-                          }' "$ZD_TICKET_TITLE" "$ZD_REQUESTER_ID" "$ZD_BODY_MESSAGE")
-
-    # Encoding ZD token.
-    ZD_AUTH=$(echo -n "${ZD_LEAD_EMAIL}/token:${ZD_TOKEN}" | openssl enc -A -base64)
-    curl ${ZD_API}/tickets \
-      -X POST \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Basic ${ZD_AUTH}" \
-      -d "$ZD_JSON_DATA"
-
-    echo "Zendesk Ticket successfully created."
-    echo "-------------------------------------------"
+        echo "Zendesk Ticket successfully created."
+        echo "-------------------------------------------"
+    fi
   fi
 else
   echo "Nothing to do, None available sec updates."
