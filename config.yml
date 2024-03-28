@@ -337,7 +337,6 @@ jobs:
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
       - add_ssh_keys
-      - run: terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
       - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
       - run:
           name: Check security updates
@@ -345,7 +344,11 @@ jobs:
               git config --global user.email "bender@fourkitchens.com"
               git config --global user.name "CI Bot"
               echo "Starting script"
-              cat /tmp/projects_to_update.json | ./vendor/fourkitchens/pots/scripts/security-updates/automatic-update
+              if [ -f "./.circleci/scripts/security-updates/automatic-update" ]; then
+                cat /tmp/projects_to_update.json | ./.circleci/scripts/security-updates/automatic-update
+              else
+                cat /tmp/projects_to_update.json | ./vendor/fourkitchens/pots/scripts/security-updates/automatic-update
+              fi
               echo "Script done"
 
   # Run this on one of the main branches to push a release back to github.
@@ -371,12 +374,7 @@ workflows:
   scheduled_update_check:
     when: << pipeline.parameters.run-sec-updates-check >>
     jobs:
-      - static_tests
-      - build
       - security_updates_check:
-          requires:
-            - static_tests
-            - build
           filters:
             branches:
               only:
