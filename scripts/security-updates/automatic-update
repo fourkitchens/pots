@@ -4,22 +4,24 @@
 set -e
 
 echo "Updating projects"
-source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
 cd $DIR
+source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 BRANCH_NAME="feature/automated-sec-update-$NOW"
+
 # 1. Load the JSON data in a variable.
 JSON_DATA=$(jq -r)
 # 2. Use jq to parse the JSON and extract the "advisories" object.
 ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
+
 MESSAGE=""
+TEST_STEPS=""
 ZD_PROJECTS_UPDATED=""
 
-
 # Helper function to check if branch exist on remote repository.
-function gh_branch_exist () {
+gh_branch_exist () {
 
 # Check if branch already exists
   if [[ `git ls-remote --head origin $BRANCH_NAME` ]]; then
@@ -32,7 +34,7 @@ function gh_branch_exist () {
 }
 
 # Creates a Git branch.
-function create_gh_branch () {
+create_gh_branch () {
   # Create security update branch for $NOW
   cd $DIR
   git branch $BRANCH_NAME
@@ -41,7 +43,7 @@ function create_gh_branch () {
 }
 
 # Helper function to check if there are avaiable sec update to apply.
-function security_updates_available () {
+security_updates_available () {
   # 3. Loop through each key-value pair in the "advisories" object.
   AVAILABLE_UPDATE="false"
   for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
@@ -53,7 +55,6 @@ function security_updates_available () {
   done
   echo $AVAILABLE_UPDATE
 }
-
 
  # Checking there pending sec updates.
 if [[ $(security_updates_available) == "true" ]]; then
@@ -68,6 +69,7 @@ if [[ $(security_updates_available) == "true" ]]; then
   # Loop through each key-value pair in the "advisories" object.
   for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
     PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
+
     if [[ "${PROJECT}" == drupal* ]]; then
       echo "Updating $PROJECT"
       echo "-----------------"
@@ -89,12 +91,13 @@ if [[ $(security_updates_available) == "true" ]]; then
           AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
         fi
         MESSAGE+="${AUX}\n"
-         # IA Genereted Testing steps.
+        # IA Genereted Testing steps.
         if [ -n "${OPENAI_API_KEY}" ]; then
-          PROMPT_TEXT="I am updating the following drupal project: $PROJECT because a security update, could you give me functional teststing instructions for it?"
+          PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional teststing instructions for it?"
           OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT")
-          TEST_STEPS+= "IA testing instructions for the project ${$PROJECT}:\n"
+          TEST_STEPS+="### IA testing instructions for the project ${PROJECT}:\n"
           TEST_STEPS+="${OPENAI_RESPONSE}\n"
+        fi
         echo "Updated $PROJECT"
         echo "---------------"
       fi
@@ -109,7 +112,7 @@ if [[ $(security_updates_available) == "true" ]]; then
   echo "-------------------------------------------"
   git push --set-upstream origin $BRANCH_NAME
 
-  # Create the PR and ticket.
+  # Create the PR
   if [ -z "$MESSAGE" ]
   then
     echo "Nothing to update."
@@ -120,13 +123,13 @@ if [[ $(security_updates_available) == "true" ]]; then
     TITLE="(AUTO-SEC): Security updates for $NOW"
     BODY=`cat ./vendor/fourkitchens/pots/scripts/security-updates/PULL_REQUEST_TEMPLATE.md`
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
+    BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
     if [ ! -z "$SITE_NAME" ]; then
       BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
-      BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
     fi
     PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
 
-    # creating PR.
+    # Running the request
     response=$( \
         curl -sw "%{http_code}" -L \
         -X POST \
@@ -166,7 +169,7 @@ if [[ $(security_updates_available) == "true" ]]; then
       # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
       # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
 
-      ZD_BODY_MESSAGE=`cat ./.circleci/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
+      ZD_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
       # Replacing placehoders into the template.
       ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
       ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
