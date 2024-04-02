@@ -5,6 +5,13 @@ version: 2.1
 # defaults here for any permanent configuration you need to do on a project
 # by project basis.
 parameters:
+
+  run-sec-updates-check:
+    description: "use to trigger the Autosec process"
+    type: boolean
+    default: false
+    # The value for this variable will be set using a External POST request
+    # To trigger the Automatic security updates check.
   php-version:
     description: major.minor version number for php version to use.
     type: string
@@ -304,6 +311,46 @@ jobs:
       - deploy-to-pantheon-env:
           environment: 'live'
 
+
+  security_updates_check:
+    <<: *defaults
+    docker:
+      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+    steps:
+      - run:
+          name: Upgrade composer
+          command: composer self-update
+      - checkout
+      - php/install-composer
+      - php/install-packages
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - add_ssh_keys
+      - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
+      - run:
+          name: Check security updates
+          command: |
+              git config --global user.email "bender@fourkitchens.com"
+              git config --global user.name "CI Bot"
+              echo "Starting script"
+              if [ -f "./.circleci/scripts/security-updates/automatic-update" ]; then
+                cat /tmp/projects_to_update.json | ./.circleci/scripts/security-updates/automatic-update
+              else
+                cat /tmp/projects_to_update.json | ./vendor/fourkitchens/pots/scripts/security-updates/automatic-update
+              fi
+              echo "Script done"
+
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -323,9 +370,22 @@ jobs:
 
 workflows:
   version: 2
+
+  scheduled_update_check:
+    when: << pipeline.parameters.run-sec-updates-check >>
+    jobs:
+      - security_updates_check:
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+
   build-deploy-pantheon:
     when:
-      equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      and:
+      - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
     jobs:
       - static_tests
       - build
