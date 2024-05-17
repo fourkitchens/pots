@@ -17,9 +17,9 @@ if [[ -z "$P_SITE" ]] || [[ -z "$P_ENV" ]]; then
   exit 1
 fi
 
-echo "Starting environment deploy commmands."
+echo "Starting environment deploy commands."
 # Update the Drupal database
-terminus -n drush "$P_SITE.$P_ENV" -- updatedb -y -vvv
+terminus -n drush -vvv "$P_SITE.$P_ENV" -- updatedb -y
 
 # Clear Drupal cache
 echo "Clearing Drupal cache."
