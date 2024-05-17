@@ -19,7 +19,7 @@ fi
 
 echo "Starting environment deploy commands."
 # Update the Drupal database
-terminus -n -vvv drush "$P_SITE.$P_ENV" -- updatedb -y
+terminus -n drush "$P_SITE.$P_ENV" -- updatedb -y
 
 # Clear Drupal cache
 echo "Clearing Drupal cache."
