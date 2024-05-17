@@ -232,21 +232,20 @@ if [[ $(security_updates_available) == "true" ]]; then
 
     # Create a ticket for ClickUp.
     if [ -n "${CU_REQUESTER_ID}" -a -n "${CU_TOKEN}" -a -n "${CU_LEAD_EMAIL}" ]; then
+      UNIX_TIMESTAMP=$(date '+%s')
+
+      # Creating ClickUp ticket.
       echo "Creating security updates ClickUp Ticket."
       echo "-------------------------------------------"
       CU_API=https://api.clickup.com/api/v2
       # Environment variables; should be defined as CircleCI variables.
       # CU_CLIENT_ID: Look in ClickUp for id. e.g. 16
-      # CU_REQUESTER_ID: Found by following the steps below.
-      # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
-      # 2. Search for the user you need the requester ID for.
-      # 3. The user ID can be obtained from the user's url.
-      #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-      #   e.g. Requester ID: 378771022972
+      # CU_REQUESTER_ID: Look in ClickUp for id. e.g. 54648604
+      # CU_LIST_ID: Look in ClickUp for id. e.g. 901300865356
       # CU_TOKEN: Located in 1Pass.
       # CU_LEAD_EMAIL: Find lead in engagements database.
 
-      CU_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
+      CU_BODY_MESSAGE=`cat ./scripts/security-updates/TICKET_TEMPLATE.md`
       # Replacing placeholders in the template.
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$CU_PROJECTS_UPDATED}
@@ -263,7 +262,7 @@ if [[ $(security_updates_available) == "true" ]]; then
                                ],
                                "status": "in progress",
                                "priority": 2,
-                               "start_date": %s,
+                               "start_date": "%s",
                                "start_date_time": false,
                                "notify_all": false,
                                "parent": null,
@@ -274,29 +273,35 @@ if [[ $(security_updates_available) == "true" ]]; then
                                    "id": "b8bbcb75-a7c8-4eb7-9202-e56d227eefbf",
                                    "value": "%s"
                                  }
-                               ]
-                               "description": "%s",
+                               ],
+                               "description": "%s"
                              }' "$CU_TICKET_TITLE" "$UNIX_TIMESTAMP" "$CU_CLIENT_ID" "$CU_BODY_MESSAGE")
 
-        # Encoding CU token.
-        CU_AUTH=$(echo -n "${CU_LEAD_EMAIL}/token:${CU_TOKEN}" | openssl enc -A -base64)
-        curl ${CU_API}/list/901300865356/task \
-          -X POST \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Basic ${CU_AUTH}" \
-          -d "$CU_JSON_DATA"
+        # Create the ticket and capture the response.
+        RESPONSE=$(
+            curl -s ${CU_API}/list/901300865356/task \
+              -i -X POST \
+              -H "Authorization: ${CU_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$CU_JSON_DATA"
+          )
 
-        # TODO: Retrieve the task id from the newly created ticket.
-        TASK_ID="86a36wj6y" # For testing purposes.
+        # Extract the task id from the response.
+        TASK_ID=$(echo "$RESPONSE" | awk -F'"id":' '{print $2}' | awk -F',' '{print $1}' | sed 's/"//g' | tr -d '[:space:]')
 
-        # TODO: Use the task id to add the Requester to the requester custom field.
+        # Use the task id to add the requester to the "Requester" custom field.
         CU_JSON_DATA_REQUESTER=$(printf '{
-                                            "value": "%s"
-                                         }' "$CU_REQUESTER_ID")
-        curl ${CU_API}/task/"${TASK_ID}"/field/601d8088-a5d6-41c2-ad32-9bec68eac624 \
+                                               "value": {
+                                                 "add": [
+                                                   %s
+                                                 ]
+                                               }
+                                             }' "$CU_REQUESTER_ID")
+
+        curl -s ${CU_API}/task/${TASK_ID}/field/601d8088-a5d6-41c2-ad32-9bec68eac624 \
                   -X POST \
                   -H "Content-Type: application/json" \
-                  -H "Authorization: Basic ${CU_AUTH}" \
+                  -H "Authorization: ${CU_TOKEN}" \
                   -d "$CU_JSON_DATA_REQUESTER"
 
         echo "ClickUp Ticket successfully created."
