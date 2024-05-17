@@ -56,7 +56,7 @@ else
   if [[ "$TERMINUS_ENV" != "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_MULTIDEV_ENV_EVERY_PUSH" == "YES" ]]
   then
     echo "This project is set to clone content for multidevs every push."
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS -vvv
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
     if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
       echo "Sanitizing Database."
@@ -66,7 +66,7 @@ else
   elif [[ "$TERMINUS_ENV" == "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH" == "YES" ]]
   then
     echo "This project is set to clone content for the github development multidev every push."
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS  -vvv
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
     if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
       echo "Sanitizing Database."
@@ -74,7 +74,7 @@ else
       $( $SANITIZE_SCRIPT )
     fi
   else
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" $CREATE_OPTIONS  -vvv
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" $CREATE_OPTIONS
   fi
 fi
 
