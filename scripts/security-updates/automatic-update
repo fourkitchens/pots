@@ -232,7 +232,6 @@ if [[ $(security_updates_available) == "true" ]]; then
 
     # Create a ticket for ClickUp.
     if [ -n "${CU_REQUESTER_ID}" -a -n "${CU_TOKEN}" -a -n "${CU_LEAD_EMAIL}" ]; then
-      UNIX_TIMESTAMP=$(date '+%s')
 
       # Creating ClickUp ticket.
       echo "Creating security updates ClickUp Ticket."
