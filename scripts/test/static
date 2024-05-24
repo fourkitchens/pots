@@ -2,8 +2,56 @@
 
 set -eo pipefail
 
-# Lint php code for syntax errors
-composer -n lint
+if [[ -z "$DOCROOT" ]]; then
+  DOCROOT=web
+fi
 
-# Check coding standards
-composer -n code-sniff
+if [[ -z "$PHP_SCRIPTS" ]]; then
+  PHP_SCRIPTS="$DOCROOT/modules/custom $DOCROOT/themes/custom $DOCROOT/sites"
+fi
+
+if [[ -z "$SKIP_ESLINT" ]]; then
+  SKIP_ESLINT=NO
+fi
+
+echo "Checking for left over conflict markers."
+if git diff --check | grep "leftover conflic marker"; then
+  exit 1
+fi
+
+# Lint php code for syntax errors
+if composer run --list | grep -q "  lint"; then
+  echo "Custom composer lint script detected. Running composer lint."
+  composer -n lint
+else
+  # Default PHP Linting
+
+  # PHP Lint
+  echo "Running PHP Lint"
+  find $PHP_SCRIPTS \( -iname  '*.php' -o -iname '*.inc' -o -iname '*.module' -o -iname '*.install'-o -iname '*.theme' \) '!' -path '*/node_modules/*' -print0 | xargs -0 -n1 -P8 php -l
+
+  # Default ESLinting if availible
+  if [[ -f ./node_modules/.bin/eslint ]] && [[ $SKIP_ESLINT != "YES" ]]; then
+    echo "Running ESlint."
+    ./node_modules/.bin/eslint ./
+    # TODO Add a default eslint config to check JS and YAML files to Drupal
+    # core's base standard.
+  fi
+fi
+
+# Checking for stinky code.
+if composer run --list | grep -q "  lint"; then
+  echo "Custom composer code-sniff script detected. Running composer code-sniff."
+  composer -n code-sniff
+else
+  # Check coding standards
+  if [[ -f ./vendor/bin/phpcs && $SKIP_CODE_SNIFF != "YES" ]]; then
+    if [[ -f phpcs.xml  || -f phpcs.xml.dist ]]; then
+      echo "Running PHPCS"
+      ./vendor/bin/phpcs ./
+      # TODO Add a default phpcs config to check coding standards of PHP files
+      # to Drupal core's base standard.
+    fi
+  fi
+fi
+
