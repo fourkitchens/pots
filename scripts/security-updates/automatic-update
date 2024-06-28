@@ -19,7 +19,7 @@ ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
 
 MESSAGE=""
 TEST_STEPS=""
-ZD_PROJECTS_UPDATED=""
+PROJECTS_UPDATED=""
 
 # Helper function to check if branch exist on remote repository.
 gh_branch_exist () {
@@ -85,7 +85,7 @@ if [[ $(security_updates_available) == "true" ]]; then
         # Building PR information.
         # Remove prefix "drupal/" from the project name
         AUX=${PROJECT//drupal\//''}
-        ZD_PROJECTS_UPDATED+="${AUX}, "
+        PROJECTS_UPDATED+="${AUX}, "
         if [ $AUX == 'core' ]; then
           AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
         else
@@ -171,7 +171,7 @@ if [[ $(security_updates_available) == "true" ]]; then
       ZD_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
       # Replacing placeholders in the template.
       ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
+      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
       # Scraping new line characters.
       ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
       ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
@@ -247,7 +247,7 @@ if [[ $(security_updates_available) == "true" ]]; then
       CU_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
       # Replacing placeholders in the template.
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$CU_PROJECTS_UPDATED}
+      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
       # Scraping new line characters.
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//$'\n'/\\n}
       CU_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
