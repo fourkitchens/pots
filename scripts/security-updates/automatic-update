@@ -285,7 +285,7 @@ if [[ $(security_updates_available) == "true" ]]; then
               -d "$CU_JSON_DATA"
           )
 
-        # Extract the task id from the response.
+        # Extract the task id from the response; I could not get jq to work.
         TASK_ID=$(echo "$RESPONSE" | awk -F'"id":' '{print $2}' | awk -F',' '{print $1}' | sed 's/"//g' | tr -d '[:space:]')
 
         # Use the task id to add the requester to the "Requester" custom field.
