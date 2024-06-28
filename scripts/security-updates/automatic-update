@@ -244,7 +244,7 @@ if [[ $(security_updates_available) == "true" ]]; then
       # CU_TOKEN: Located in 1Pass.
       # CU_LEAD_EMAIL: Find lead in engagements database.
 
-      CU_BODY_MESSAGE=`cat ./scripts/security-updates/TICKET_TEMPLATE.md`
+      CU_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
       # Replacing placeholders in the template.
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
       CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$CU_PROJECTS_UPDATED}
