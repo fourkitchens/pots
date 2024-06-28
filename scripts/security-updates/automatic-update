@@ -7,7 +7,7 @@ echo "Updating projects"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
-UNIX_TIMESTAMP=$(date -d "$NOW" '+%s')
+UNIX_TIMESTAMP_MS=$(($(date -d "$NOW" '+%s')*1000))
 cd $DIR
 source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 BRANCH_NAME="feature/automated-sec-update-$NOW"
@@ -274,7 +274,7 @@ if [[ $(security_updates_available) == "true" ]]; then
                                  }
                                ],
                                "description": "%s"
-                             }' "$CU_TICKET_TITLE" "$UNIX_TIMESTAMP" "$CU_CLIENT_ID" "$CU_BODY_MESSAGE")
+                             }' "$CU_TICKET_TITLE" "$UNIX_TIMESTAMP_MS" "$CU_CLIENT_ID" "$CU_BODY_MESSAGE")
 
         # Create the ticket and capture the response.
         RESPONSE=$(
