@@ -7,7 +7,8 @@ HOSTING_ENV=$1
 HOSTING_PATH=$2
 RELEASE_BRANCH=$3
 DOCROOT=$4
-SYNC_CONFIG=$5
+DRUSH_CMD=$5
+SYNC_CONFIG=$6
 
 if [[ -z "$HOSTING_ENV" ]]; then
   echo "Argument 1: Hosting Env is missing."

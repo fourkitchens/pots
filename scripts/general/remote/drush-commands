@@ -1,6 +1,9 @@
 #!/bin/bash
 
 set -eo pipefail
+HOSTING_PATH=$1
+DRUSH_CMD=$2
+SYNC_CONFIG=$3
 
 if [[ -z "$DRUSH_CMD" ]]; then
   DRUSH_CMD='./vendor/bin/drush'
