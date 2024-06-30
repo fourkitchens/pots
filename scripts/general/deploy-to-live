@@ -31,7 +31,7 @@ fi
 if [[ -z "$DRUSH_CMD" ]]; then
   DRUSH_CMD='./vendor/bin/drush'
 fi
-if [[ -z "$SYNC_CONIG" ]]; then
+if [[ -z "$SYNC_CONFIG" ]]; then
   SYNC_CONFIG="YES"
 fi
 REMOTE_ENV_NAME="live"
