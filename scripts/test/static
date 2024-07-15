@@ -11,7 +11,26 @@ fi
 if [[ -z "$SKIP_ESLINT" ]]; then
   SKIP_ESLINT=NO
 fi
-
+if [[ -z "$SKIP_CODE_SNIFF" ]]; then
+  SKIP_CODE_SNIFF=NO
+fi
+if [[ -z "$SKIP_PHPSTAN" ]]; then
+  SKIP_PHPSTAN=NO
+fi
+if [[ "$SKIP_PHPSTAN" != "YES" ]]; then
+  if [[ -z "$PHPSTAN_CONFIG_FILE" ]]; then
+    if [[ -f phpstan.neon ]]; then
+      PHPSTAN_CONFIG_FILE="phpstan.neon"
+    elif [[ -f phpstan.neon.dist ]]; then
+      PHPSTAN_CONFIG_FILE="phpstan.neon.dist"
+    elif [[ -f phpstan.dist.neon ]]; then
+      PHPSTAN_CONFIG_FILE="phpstan.neon.dist"
+    fi
+  else
+    echo "PHPStan is not configured. In the future, this will result in a default configuration being used."
+    SKIP_PHPSTAN=NO
+  fi
+fi
 RESULTS_DIR=./test-results
 
 FAIL=NO
@@ -57,7 +76,7 @@ else
 fi
 
 # Checking for stinky code.
-if composer run --list | grep -q "  lint"; then
+if composer run --list | grep -q "  code-sniff"; then
   echo "Custom composer code-sniff script detected. Running composer code-sniff."
   composer -n code-sniff
   if [ $? -ne 0 ]; then
@@ -65,10 +84,10 @@ if composer run --list | grep -q "  lint"; then
   fi
 else
   # Check coding standards
-  if [[ -f ./vendor/bin/phpcs && $SKIP_CODE_SNIFF != "YES" ]]; then
+  if composer exec --list | grep -q 'phpcs' && [[ "$SKIP_CODE_SNIFF" != "YES" ]]; then
     if [[ -f phpcs.xml  || -f phpcs.xml.dist ]]; then
       echo "Running PHPCS"
-      ./vendor/bin/phpcs -p --report-summary --report-junit=$RESULTS_DIR/phpcs.xml
+       composer exec -- phpcs -p --report-summary --report-junit=$RESULTS_DIR/phpcs.xml
       if [ $? -ne 0 ]; then
         FAIL=YES
       fi
@@ -76,6 +95,17 @@ else
       # to Drupal core's base standard.
     fi
   fi
+fi
+
+# Check for deprecations.
+if composer exec --list | grep -q 'phpstan' && [[ "$SKIP_PHPSTAN" != "YES" ]]; then
+  echo "Running PHPStan"
+  composer exec -- phpstan analyze -c $PHPSTAN_CONFIG_FILE --error-format=junit > $RESULTS_DIR/phpstan.xml
+  if [ $? -ne 0 ]; then
+    FAIL=YES
+  fi
+  # TODO Add a default phpstan config to check coding deprecations of PHP files
+  # to Drupal core's base standard.
 fi
 if [ $FAIL == "YES" ]; then
   echo "Tests Failed"
