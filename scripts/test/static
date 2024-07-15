@@ -76,7 +76,7 @@ else
 fi
 
 # Checking for stinky code.
-if composer run --list | grep -q "  lint"; then
+if composer run --list | grep -q "  code-sniff"; then
   echo "Custom composer code-sniff script detected. Running composer code-sniff."
   composer -n code-sniff
   if [ $? -ne 0 ]; then
@@ -100,7 +100,7 @@ fi
 # Check for deprecations.
 if composer exec --list | grep -q 'phpstan' && [[ "$SKIP_PHPSTAN" != "YES" ]]; then
   echo "Running PHPStan"
-  composer exec -- phpstan analyze -c $PHPSTAN_CONFIG_FILE --error-format=junit > junit.xml
+  composer exec -- phpstan analyze -c $PHPSTAN_CONFIG_FILE --error-format=junit > $RESULTS_DIR/phpstan.xml
   if [ $? -ne 0 ]; then
     FAIL=YES
   fi
