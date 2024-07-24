@@ -25,10 +25,10 @@ if [[ "$SKIP_PHPSTAN" != "YES" ]]; then
       PHPSTAN_CONFIG_FILE="phpstan.neon.dist"
     elif [[ -f phpstan.dist.neon ]]; then
       PHPSTAN_CONFIG_FILE="phpstan.neon.dist"
+    else
+       echo "PHPStan is not configured. In the future, this will result in a default configuration being used."
+       SKIP_PHPSTAN=YES
     fi
-  else
-    echo "PHPStan is not configured. In the future, this will result in a default configuration being used."
-    SKIP_PHPSTAN=NO
   fi
 fi
 RESULTS_DIR=./test-results
