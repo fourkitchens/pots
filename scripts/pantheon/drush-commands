@@ -2,14 +2,14 @@
 
 set -eo pipefail
 
-P_SITE=$1
-P_ENV=$2
+P_SITE="$1"
+P_ENV="$2"
 
 if [[ -z "$P_SITE" ]]; then
-  P_SITE=$TERMINUS_SITE
+  P_SITE="$TERMINUS_SITE"
 fi
 if [[ -z "$P_ENV" ]]; then
-  P_ENV=$TERMINUS_ENV
+  P_ENV="$TERMINUS_ENV"
 fi
 
 if [[ -z "$P_SITE" ]] || [[ -z "$P_ENV" ]]; then
@@ -58,6 +58,12 @@ terminus -n env:clear-cache $P_SITE.$P_ENV
 if [[ "$P_ENV" != 'live' ]]; then
   # Ensure secrets are set
   terminus -n secrets:set "$P_SITE.$P_ENV" token "$GITHUB_TOKEN" --file='github-secrets.json' --clear --skip-if-empty
+fi
+
+# We make the assummption that this script is being run from the project root.
+# Allow for post deployment hooks.
+if [ -f "./.circleci/scripts/post-drush-commands" ]; then
+  ./.circleci/scripts/post-drush-commands $P_SITE $P_ENV
 fi
 
 echo "Done deploying. Your environment is ready for your review."

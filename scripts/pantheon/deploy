@@ -9,9 +9,14 @@ set -eo pipefail
 #
 
 # Authenticate with Terminus
-terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+if [[ -z "$( terminus whoami )" ]]; then
+  echo "Logging in to terminus"
+  terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+else
+  echo "Using existing terminus session"
+fi
 
-if [[ $TERMINUS_ENV == ci-* ]]  &&  [[ $CI_BUILD == 'NO' ]]
+if [[ $TERMINUS_ENV == ci-*  &&  $CI_BUILD == 'NO' ]]
 then
   echo "We do not build CI environments. If you see this on a Pull Request, please rerun the CircleCI Workflow."
   terminus -n build:comment:add:commit --message "We do not build CI environments. If you see this on a Pull Request, please rerun the CircleCI Workflow."
@@ -26,7 +31,7 @@ echo "Deleting old Multidevs for Closed PRs. Sending to Background."
 
 # Prepare for Pantheon
 echo "Preparing Artifact for Pantheon."
-composer -n run prepare-for-pantheon
+terminus -n build:gitignore:cut
 
 echo "Building from $CI_BRANCH."
 echo "The Main Branch is $MAIN_BRANCH."
@@ -36,45 +41,62 @@ then
   if [[ "$CANONICAL_ENV" != "dev" ]]
   then
     terminus -n env:clone-content "$TERMINUS_SITE.$CANONICAL_ENV" dev
-    if [[ ! -z "$SANATIZE_SCRIPT" ]]
+    if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
-      $( $SANATIZE_SCRIPT )
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
+      $( $SANITIZE_SCRIPT )
     fi
   fi
   terminus -n build:env:push "$TERMINUS_SITE.dev" --yes
 else
+  CREATE_OPTIONS="--yes --pr-id $PR_NUMBER"
   # Create a new multidev environment (or push to an existing one)
   echo "Building Multidev $TERMINUS_ENV from $CANONICAL_ENV"
   if [[ "$TERMINUS_ENV" != "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_MULTIDEV_ENV_EVERY_PUSH" == "YES" ]]
   then
     echo "This project is set to clone content for multidevs every push."
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes --clone-content
-    if [[ ! -z "$SANATIZE_SCRIPT" ]]
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
+    if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
-      $( $SANATIZE_SCRIPT )
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
+      $( $SANITIZE_SCRIPT )
     fi
   elif [[ "$TERMINUS_ENV" == "$DEVELOPMENT_ENV" ]] && [[ "$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH" == "YES" ]]
   then
     echo "This project is set to clone content for the github development multidev every push."
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes --clone-content
-    if [[ ! -z "$SANATIZE_SCRIPT" ]]
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --clone-content $CREATE_OPTIONS
+    if [[ ! -z "$SANITIZE_SCRIPT" ]]
     then
-      echo "Sanatizing Database."
-      # If we've set a sanatization script for the database, run it.
-      $( $SANATIZE_SCRIPT )
+      echo "Sanitizing Database."
+      # If we've set a sanitization script for the database, run it.
+      $( $SANITIZE_SCRIPT )
     fi
   else
-    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes
+    terminus -n build:env:create "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" $CREATE_OPTIONS
   fi
+fi
+
+# @TODO after BUILD TOOLS 3.0.6 is released to docker containers we can use --git-ref-compare instead of this workaround
+# Force a change to pantheon.yml to force it to rebuild.
+git fetch -q origin
+PANTHEON_YML_DIFF="$( git diff origin/$MAIN_BRANCH -- pantheon.yml )"
+PANTHEON_UPSTREAM_YML_DIFF=""
+if [ -f pantheon.upstream.yml ]; then
+  PANTHEON_UPSTREAM_YML_DIFF="$( git diff origin/$MAIN_BRANCH -- pantheon.upstream.yml )"
+fi
+
+if [[ ! -z "$PANTHEON_YML_DIFF" || ! -z "$PANTHEON_UPSTREAM_YML_DIFF" ]]; then
+  echo "# Workaround change to pantheon.yml to force environment update" >> pantheon.yml
+  terminus -n build:env:push "$TERMINUS_SITE.$TERMINUS_ENV" --message="Workaround change to pantheon.yml to force environment update"
 fi
 
 # We make the assummption that this script is being run from the project root.
 if [ -f "./.circleci/scripts/drush-commands" ]; then
-  ./.circleci/scripts/drush-commands
+  ./.circleci/scripts/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 else
-  ./vendor/ensembleiq/project_ci/scripts/pantheon/drush-commands
+  ./vendor/ensembleiq/project_ci/scripts/pantheon/drush-commands $TERMINUS_SITE $TERMINUS_ENV
 fi
+
+echo "Done deploying. Your environment is ready for your review."

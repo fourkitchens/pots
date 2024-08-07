@@ -20,5 +20,9 @@
                 }
             }
         }
+    },
+    "conflict": {
+        "fourkitchens/project_ci": "*",
+        "fourkitchens/pots": "*"
     }
 }
