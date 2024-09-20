@@ -7,6 +7,7 @@ echo "Updating projects"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
+UNIX_TIMESTAMP_MS=$(($(date -d "$NOW" '+%s')*1000))
 cd $DIR
 source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 BRANCH_NAME="feature/automated-sec-update-$NOW"
@@ -18,7 +19,7 @@ ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
 
 MESSAGE=""
 TEST_STEPS=""
-ZD_PROJECTS_UPDATED=""
+PROJECTS_UPDATED=""
 
 # Helper function to check if branch exist on remote repository.
 gh_branch_exist () {
@@ -42,7 +43,7 @@ create_gh_branch () {
   echo "true"
 }
 
-# Helper function to check if there are avaiable sec update to apply.
+# Helper function to check if there are available sec update to apply.
 security_updates_available () {
   # 3. Loop through each key-value pair in the "advisories" object.
   AVAILABLE_UPDATE="false"
@@ -84,7 +85,7 @@ if [[ $(security_updates_available) == "true" ]]; then
         # Building PR information.
         # Remove prefix "drupal/" from the project name
         AUX=${PROJECT//drupal\//''}
-        ZD_PROJECTS_UPDATED+="${AUX}, "
+        PROJECTS_UPDATED+="${AUX}, "
         if [ $AUX == 'core' ]; then
           AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
         else
@@ -152,85 +153,83 @@ if [[ $(security_updates_available) == "true" ]]; then
       exit 1
     fi
 
-    if [ -n "${ZD_REQUESTER_ID}" -a -n "${ZD_TOKEN}" -a -n "${ZD_LEAD_EMAIL}" ]; then
-      echo "Creating security updates Zendesk Ticket."
+    # Create a ticket for ClickUp.
+    if [ -n "${CU_REQUESTER_ID}" -a -n "${CU_TOKEN}" -a -n "${CU_LEAD_EMAIL}" ]; then
+
+      # Creating ClickUp ticket.
+      echo "Creating security updates ClickUp Ticket."
       echo "-------------------------------------------"
-      ZD_API=https://advomatic.zendesk.com/api/v2
-      # Hardcode Requester ID.
-      # To get this project's Requester ID from Zendesk:
-      # 1. Visit: https://advomatic.zendesk.com/agent/user_filters
-      # 2. Search for the user you need the requester ID for.
-      # 3. The user ID can be obtained from the user's url.
-      #   e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-      #   e.g. Requester ID: 378771022972
-      # 4. Replace the value below.
-      # ZD_REQUESTER_ID : Env varible, should be define into the CircleCI variables, User into the client Org.
-      # ZD_TOKEN: Env varible, should be define into the CircleCI variables, you could find it into 1password
-      # ZD_LEAD_EMAIL: Env varible, should be define into the CircleCI variables (TL, TS)
-      # group_id: 360007800612 : This line into the JSON is assignning the ticket to security group
+      CU_API=https://api.clickup.com/api/v2
+      # Environment variables; should be defined as CircleCI variables.
+      # CU_CLIENT_ID: Look in ClickUp for id. e.g. 16
+      # CU_REQUESTER_ID: Look in ClickUp for id. e.g. 54648604
+      # CU_LIST_ID: Look in ClickUp for id. e.g. 901300865356
+      # CU_TOKEN: Located in 1Pass.
+      # CU_LEAD_EMAIL: Find lead in engagements database.
 
-      ZD_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/ZD_TICKET_TEMPLATE.md`
-      # Replacing placehoders into the template.
-      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//\[PROJECTS\]/$ZD_PROJECTS_UPDATED}
-      # Scaping new lines characters.
-      ZD_BODY_MESSAGE=${ZD_BODY_MESSAGE//$'\n'/\\n}
-      ZD_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
-      ZD_JSON_DATA=$(printf '{
-                              "ticket": {
-                                "subject": "%s" ,
-                                "requester_id": "%s",
-                                "group_id": 360007800612,
-                                "priority": "high",
-                                "type": "task",
-                                "status": "new",
-                                "tags": [
-                                  "security-updates"
-                                ],
-                                "comment": {
-                                  "body": "%s"
-                                },
-                                "custom_fields": [
-                                  {
-                                    "id": 360002688411,
-                                    "value": null
-                                  },
-                                  {
-                                    "id": 360027138451,
-                                    "value": null
-                                  },
-                                  {
-                                    "id": 22966000,
-                                    "value": "Updates regarding security releases are completed."
-                                  },
-                                  {
-                                    "id": 24204016,
-                                    "value": "Perform auto updates for security release."
-                                  },
-                                  {
-                                    "id": 22966010,
-                                    "value": null
-                                  },
-                                  {
-                                    "id": 360048728091,
-                                    "value": false
-                                  }
-                                ]
-                              }
-                            }' "$ZD_TICKET_TITLE" "$ZD_REQUESTER_ID" "$ZD_BODY_MESSAGE")
+      CU_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
+      # Replacing placeholders in the template.
+      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
+      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
+      # Scraping new line characters.
+      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//$'\n'/\\n}
+      CU_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+      CU_JSON_DATA=$(printf '{
+                               "name": "%s",
+                               "assignees": [
+                                 82036728
+                               ],
+                               "tags": [
+                                 "autosec update"
+                               ],
+                               "status": "in progress",
+                               "priority": 2,
+                               "start_date": "%s",
+                               "start_date_time": false,
+                               "notify_all": false,
+                               "parent": null,
+                               "links_to": null,
+                               "check_required_custom_fields": true,
+                               "custom_fields": [
+                                 {
+                                   "id": "b8bbcb75-a7c8-4eb7-9202-e56d227eefbf",
+                                   "value": "%s"
+                                 }
+                               ],
+                               "description": "%s"
+                             }' "$CU_TICKET_TITLE" "$UNIX_TIMESTAMP_MS" "$CU_CLIENT_ID" "$CU_BODY_MESSAGE")
 
-        # Encoding ZD token.
-        ZD_AUTH=$(echo -n "${ZD_LEAD_EMAIL}/token:${ZD_TOKEN}" | openssl enc -A -base64)
-        curl ${ZD_API}/tickets \
-          -X POST \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Basic ${ZD_AUTH}" \
-          -d "$ZD_JSON_DATA"
+        # Create the ticket and capture the response.
+        RESPONSE=$(
+            curl -s ${CU_API}/list/901300865356/task \
+              -i -X POST \
+              -H "Authorization: ${CU_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$CU_JSON_DATA"
+          )
 
-        echo "Zendesk Ticket successfully created."
+        # Extract the task id from the response; I could not get jq to work.
+        TASK_ID=$(echo "$RESPONSE" | awk -F'"id":' '{print $2}' | awk -F',' '{print $1}' | sed 's/"//g' | tr -d '[:space:]')
+
+        # Use the task id to add the requester to the "Requester" custom field.
+        CU_JSON_DATA_REQUESTER=$(printf '{
+                                               "value": {
+                                                 "add": [
+                                                   %s
+                                                 ]
+                                               }
+                                             }' "$CU_REQUESTER_ID")
+
+        curl -s ${CU_API}/task/${TASK_ID}/field/601d8088-a5d6-41c2-ad32-9bec68eac624 \
+                  -X POST \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: ${CU_TOKEN}" \
+                  -d "$CU_JSON_DATA_REQUESTER"
+
+        echo "ClickUp Ticket successfully created."
         echo "-------------------------------------------"
     fi
   fi
 else
-  echo "Nothing to do, None available sec updates."
+  echo "Nothing to do! No available security updates."
 fi
