@@ -578,6 +578,18 @@ commands:
           keys:
             - nvm-v2-{{ checksum ".nvmrc" }}
             - nvm-v2-
+      - run:
+          name: Relink NVM if it was cached.
+          command: |
+            # If NVM was cached, we need to hook it up via .bashrc. This will
+            # allow the node orb to detect nvm being installed and not make
+            # the nvm install script try to upgrade the existing nvm version.
+            NVM_DIR="$HOME/.nvm"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              echo 'NVM already exists.'
+              echo 'export NVM_DIR="$HOME/.nvm"' >> "$BASH_ENV";
+              echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" --no-use' >> "$BASH_ENV";
+            fi
       - node/install:
           install-yarn: << parameters.install-yarn >>
           node-install-dir: << parameters.node-install-dir >>
