@@ -12,11 +12,11 @@ if [[ -z "$DOCROOT" ]]; then
 fi
 
 if [[ -z "$REMOTE_PROJECT_ROOT" ]]; then
-  echo "You must define $REMOTE_PROJECT_ROOT as an evnvironment variable."
+  echo "You must define \$REMOTE_PROJECT_ROOT as an evnvironment variable."
   exit 1;
 fi
 if [[ -z "$SSH_COMMAND_LIVE" ]]; then
-  echo "You must define $SSH_COMMAND_LIVE as an evnvironment variable."
+  echo "You must define \$SSH_COMMAND_LIVE as an evnvironment variable."
   exit 1;
 fi
 if [[ -z "$DEPLOY_BRANCH" ]]; then

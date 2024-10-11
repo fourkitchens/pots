@@ -36,14 +36,16 @@ fi
 if [[ -f ./vendor/bin/drush ]]; then
   if [[ ! -d "$BACKUP_DIRECTORY" ]]; then
     echo "BACKUP DIRECTORY $BACKUP_DIRECTORY doesn't exit. Attempting to create it."
-    mkdir -p $BACKUP_DIRECTORY
+    mkdir -p "$BACKUP_DIRECTORY"
   else
     echo "BACKUP DIRECTORY $BACKUP_DIRECTORY does exit. Moving on."
   fi
   BACKUP_FILE="$BACKUP_DIRECTORY/$REMOTE_ENV_NAME-$( date +"%F_%T" ).sql.gz"
   echo "Backing up DB for $HOSTING_PATH at $BACKUP_FILE"
-  ./vendor/bin/drush sql:dump --structure-tables-list=cache,cache_*  --extra-dump=--no-tablespaces | gzip > "$BACKUP_FILE"
-  if [ -s "$BACKUP_FILE" ]; then
+
+  if [ -d "$BACKUP_DIRECTORY" ] && $DRUSH_CMD sql:dump --structure-tables-list=cache,cache_*  --extra-dump=--no-tablespaces | gzip > "$BACKUP_FILE" && [ -s "$BACKUP_FILE" ]; then
+    echo "Backup successful"
+  else
     echo "A backup was not successfully made."
     exit 1;
   fi
