@@ -37,7 +37,7 @@ if [[ -z "$SSH_COMMAND_LIVE" ]]; then
   # In some cases the webroot provided by drush is a symlink in a totally
   # different folder, so lets not clobber what ever someone set.
   if [[ -z "$REMOTE_PROJECT_ROOT" ]]; then
-    REMOTE_PROJECT_ROOT= $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --fields root | grep 'root:.*$' | sed "s/[[:space:]]*root\: \(.*\)\/$DOCROOT/\1/g"
+    REMOTE_PROJECT_ROOT="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --fields root | grep 'root:.*$' | sed "s/[[:space:]]*root\: \(.*\)\/$DOCROOT/\1/g" )"
   fi
   if [[ -z "$SSH_COMMAND_LIVE" ]]; then
     echo "You must define \$SSH_COMMAND_LIVE as an environment variable or provide a drush site alias for @self.live with ssh information."
