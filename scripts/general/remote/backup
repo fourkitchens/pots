@@ -2,7 +2,6 @@
 
 set -eo pipefail
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 REMOTE_ENV_NAME="$1"
 HOSTING_PATH="$2"
 BACKUP_DIRECTORY="$3"
@@ -17,8 +16,7 @@ if [[ -z "$HOSTING_PATH" ]]; then
   exit 1
 fi
 if [[ -z "$BACKUP_DIRECTORY" ]]; then
-  BACKUP_DIRECTORY="~/backups"
-  echo $BACKUP_DIRECTORY
+  BACKUP_DIRECTORY="$HOME/backups"
 fi
 if [[ -z "$DRUSH_CMD" ]]; then
   DRUSH_CMD='./vendor/bin/drush'
@@ -39,10 +37,16 @@ if [[ -f ./vendor/bin/drush ]]; then
   if [[ ! -d "$BACKUP_DIRECTORY" ]]; then
     echo "BACKUP DIRECTORY $BACKUP_DIRECTORY doesn't exit. Attempting to create it."
     mkdir -p $BACKUP_DIRECTORY
+  else
+    echo "BACKUP DIRECTORY $BACKUP_DIRECTORY does exit. Moving on."
   fi
   BACKUP_FILE="$BACKUP_DIRECTORY/$REMOTE_ENV_NAME-$( date +"%F_%T" ).sql.gz"
   echo "Backing up DB for $HOSTING_PATH at $BACKUP_FILE"
   ./vendor/bin/drush sql:dump --structure-tables-list=cache,cache_*  --extra-dump=--no-tablespaces | gzip > "$BACKUP_FILE"
+  if [ -s "$BACKUP_FILE" ]; then
+    echo "A backup was not successfully made."
+    exit 1;
+  fi
   if [ -f "$BACKUP_DIRECTORY/newest.sql.gz" ]; then
     rm "$BACKUP_DIRECTORY/newest.sql.gz"
   fi
