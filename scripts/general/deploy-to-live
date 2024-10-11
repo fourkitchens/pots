@@ -2,17 +2,21 @@
 
 set -eo pipefail
 
+# Allow CircleCI to forward any SSH Keys so the remote server can pull from git.
+mkdir -p ~/.ssh
+printf "Host *\nForwardAgent yes" >> ~/.ssh/config
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 if [[ -z "$DOCROOT" ]]; then
   DOCROOT=web
 fi
 
 if [[ -z "$REMOTE_PROJECT_ROOT" ]]; then
-  echo 'You must define $REMOTE_PROJECT_ROOT as an evnvironment variable.'
+  echo "You must define $REMOTE_PROJECT_ROOT as an evnvironment variable."
   exit 1;
 fi
 if [[ -z "$SSH_COMMAND_LIVE" ]]; then
-  echo 'You must define $SSH_COMMAND_LIVE as an evnvironment variable.'
+  echo "You must define $SSH_COMMAND_LIVE as an evnvironment variable."
   exit 1;
 fi
 if [[ -z "$DEPLOY_BRANCH" ]]; then
