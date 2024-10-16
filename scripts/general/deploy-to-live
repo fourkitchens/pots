@@ -98,7 +98,7 @@ if [[ -z "$REMOTE_ENV_NAME" ]]; then
 fi
 
 if [[ -z "$DEPLOY_BRANCH" ]]; then
-  DEPLOY_BRANCH="$CI_BRANCH"
+  DEPLOY_BRANCH="$CIRCLE_BRANCH"
 fi
 
 if [[ -z "$BACKUP_SCRIPT_PATH" ]]; then
