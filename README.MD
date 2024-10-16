@@ -47,6 +47,7 @@ a hosted site on something like Acquia.
     - [Pantheon Specific](#pantheon-specific)
     - [Acquia Specific](#acquia-specific)
     - [Generic Hosting Specific](#generic-hosting-specific)
+      - [Must be defined if SITE ALIASES is not defined](#must-be-defined-if-site-aliases-is-not-defined)
   - [Helper Environment Variables](#helper-environment-variables)
   - [Configure Composer.json](#configure-composerjson)
   - [Configure Scripts](#configure-scripts)
@@ -329,18 +330,6 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
     **TODO:** FLESH THIS OUT MORE WITH HELP ON HOW TO GET IT
 13. Click "Add Environment Variable" to accept the changes.
 14. Click "Add Environment Variable".
-15. Type "ZD_REQUESTER_ID" in the name.
-16. Type Client requester id into "Value". The user ID can be obtained from the
-    user's url. e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-17. Click "Add Environment Variable" to accept the changes.
-18. Click "Add Environment Variable".
-19. Type "ZD_TOKEN" in the name.
-20. Type Zendesk token value id into "Value". This token is stored into 1password.
-21. Click "Add Environment Variable" to accept the changes.
-22. Click "Add Environment Variable".
-23. Type "ZD_LEAD_EMAIL" in the name.
-24. Type Project lead email value id into "Value". The projects lead email.
-25. Click "Add Environment Variable" to accept the changes.
 
 ### Generic Hosting
 
@@ -360,6 +349,37 @@ bot user can push the code live and run backups.
 
 #### Configure More CircleCi Environment Variables to work with Generic Hosting
 
+1. Create a file, self.site.yml that looks a bit like this example:
+
+   ```yaml
+      # Edit or remove this file as needed.
+      # Docs at https://github.com/drush-ops/drush/blob/master/examples/example.site.yml
+
+      prod:
+      host: 123.4.5.678
+      user: deploy-bot
+      root: /var/www/html/web
+      uri: https://example.com
+      paths:
+         drush-script: /var/www/html/web/vendor/bin/drush
+      ssh:
+         options: -p 65002
+   ```
+
+2. run `base64 -w 0 self.site.yml`. The output will look something like:
+
+   ```text
+      IyBFZGl0IG9yIHJlbW92ZSB0aGlzIGZpbGUgYXMgbmVlZGVkLgojIERvY3MgYXQgaHR0cHM6Ly9naXRodWIuY29tL2RydXNoLW9wcy9kcnVzaC9ibG9iL21hc3Rlci9leGFtcGxlcy9leGFtcGxlLnNpdGUueW1sCgpwcm9kOgpob3N0OiAxMjMuNC41LjY3OAp1c2VyOiBkZXBsb3ktYm90CnJvb3Q6IC92YXIvd3d3L2h0bWwvd2ViCnVyaTogaHR0cHM6Ly9leGFtcGxlLmNvbQpwYXRoczoKICAgIGRydXNoLXNjcmlwdDogL3Zhci93d3cvaHRtbC93ZWIvdmVuZG9yL2Jpbi9kcnVzaApzc2g6CiAgICBvcHRpb25zOiAtcCA2NTAwMgo=
+   ```
+
+3. Copy the output
+4. Navigate back to your CircleCI -> Project Settings -> Environment Variables
+   browser instance.
+5. Click "Add Environment Variable".
+6. Type "SITE_ALIASES" in the name.
+7. Paste your output from above into "Value".
+8. Click "Add Environment Variable" to accept the changes.
+9. Click "Add Environment Variable".
 
 ## Configure CircleCI config.yml
 
@@ -503,7 +523,7 @@ mandatory environment variables in this way as well.
   - Acquia: dev, test, prod
   - Pantheon: dev, test, live
 
-   Default: "prod" on Acquia. "live" on Pantheon
+   Default: "prod" on Acquia. "live" on Pantheon and generic.
 - `SANITIZE_SCRIPT`: Script used to sanitize databases. Only used when
    `CANONICAL_ENV` is not dev. There is no default.
 - `SYNC_CONFIG`: The ability to turn configuration sync on or off. By default,
@@ -545,7 +565,24 @@ mandatory environment variables in this way as well.
 
 ### Generic Hosting Specific
 
-- TODO
+- `DRUSH_CMD`: alternative location for drush on CircleCI
+- `BACKUP_SCRIPT_PATH`: Absolute path on the CircleCI environment used to define
+   a custom backup script to be injected to the remote environment.
+- `DEPLOY_SCRIPT_PATH`: Absolute path on the CircleCI environment used to define
+   a custom DEPLOY script to be injected to the remote environment.
+- `REMOTE_BACKUP_DIRECTORY`: The directory to store backups of production.
+   Defaults to `$REMOTE_PROJECT_ROOT/backups`
+- `SITE_ALIASES`: A base64 encoded site's alias file using a command like
+   `base64 -w 0 self.site.yml`
+
+#### Must be defined if SITE ALIASES is not defined
+
+- `SSH_COMMAND_LIVE`: alternative to using the `SITE_ALIASES` variable. a
+   straight ssh command like `ssh -p 1234 user@example.com -i /path/to/key`
+- `REMOTE_PROJECT_ROOT`: the remote path in which the root of the drupal project
+   lives. Not the docroot.
+- `REMOTE_DRUSH_CMD`: specify if you don't in the `SITE_ALIASES` variable or use
+   `SSH_COMMAND_LIVE`. defaults to `$REMOTE_PROJECT_ROOT/vendor/bin/drush`
 
 ## Helper Environment Variables
 

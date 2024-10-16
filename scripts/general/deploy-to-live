@@ -16,6 +16,9 @@ fi
 if [[ -z "$SYNC_CONFIG" ]]; then
   SYNC_CONFIG="YES"
 fi
+if [[ -z "$CANONICAL_ENV" ]]; then
+  CANONICAL_ENV=live
+fi
 
 # Check for an SSH command to see if we need to scavange for a aliases file.
 if [[ -z "$SSH_COMMAND_LIVE" ]]; then
@@ -114,5 +117,13 @@ if [[ -z "$REMOTE_DRUSH_CMD" ]]; then
   REMOTE_DRUSH_CMD="./vendor/bin/drush"
 fi
 
-$SSH_COMMAND_LIVE "bash -s " < "$BACKUP_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$REMOTE_DRUSH_CMD";
+if [[ $REMOTE_ENV_NAME == "prod" ]] || [[ $REMOTE_ENV_NAME == "live" ]]; then
+  $SSH_COMMAND_LIVE "bash -s " < "$BACKUP_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$REMOTE_DRUSH_CMD";
+else
+  #TODO Add ELSE logic here to pull backup from production to another enviornment
+  echo "Creating a backup from $CANONICAL_ENV to import into $REMOTE_ENV_NAME."
+  #Might be able to do s a drush-sync here. consider that the other env may not be on the same server.
+  #ssh $SSH_COMMAND_DEV "bash -s " < "$BACKUP_SCRIPT_PATH" "$CANONICAL_ENV" "$CANONICAL_REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$REMOTE_DRUSH_CMD";;
+  echo "Importing a backup from the canonical environment to $REMOTE_ENV_NAME"
+fi
 $SSH_COMMAND_LIVE "bash -s " < "$DEPLOY_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$DEPLOY_BRANCH" "$DOCROOT" "$REMOTE_DRUSH_CMD" "$SYNC_CONFIG";
