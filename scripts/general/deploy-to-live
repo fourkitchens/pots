@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -xeo pipefail
+set -eo pipefail
 
 # Allow CircleCI to forward any SSH Keys so the remote server can pull from git.
 mkdir -p ~/.ssh
