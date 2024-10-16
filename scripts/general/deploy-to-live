@@ -4,7 +4,7 @@ set -xeo pipefail
 
 # Allow CircleCI to forward any SSH Keys so the remote server can pull from git.
 mkdir -p ~/.ssh
-printf "Host *\nForwardAgent yes" >> ~/.ssh/config
+printf "Host *\nForwardAgent yes\nStrictHostKeyChecking no" >> ~/.ssh/config
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 if [[ -z "$DOCROOT" ]]; then
