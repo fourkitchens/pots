@@ -10,7 +10,11 @@ else
   echo "Using existing terminus session"
 fi
 
-terminus env:deploy "$TERMINUS_SITE".test --sync-content
+if [[ "$SYNC_LIVE_TO_TEST_ON_DEPLOY" == "YES" ]]
+  terminus env:deploy "$TERMINUS_SITE".test --sync-content
+else
+  terminus env:deploy "$TERMINUS_SITE".test
+fi
 
 # We make the assummption that this script is being run from the project root.
 if [ -f "./.circleci/scripts/drush-commands" ]; then
