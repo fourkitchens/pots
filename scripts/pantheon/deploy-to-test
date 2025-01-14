@@ -10,7 +10,7 @@ else
   echo "Using existing terminus session"
 fi
 
-if [[ "$SYNC_LIVE_TO_TEST_ON_DEPLOY" == "YES" ]]
+if [[ "$SYNC_LIVE_TO_TEST_ON_DEPLOY" == "YES" ]]; then
   terminus env:deploy "$TERMINUS_SITE".test --sync-content
 else
   terminus env:deploy "$TERMINUS_SITE".test
