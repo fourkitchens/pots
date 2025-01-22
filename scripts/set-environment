@@ -49,7 +49,6 @@ if [ -z "$CI_PULL_REQUEST" ]; then
       | grep -o '[0-9]*' \
       || true
   `
-  echo "contacted GitHub"
   if [ -z "$CI_PULL_REQUEST" ]; then
     echo "No PR found.  If this is not a mainline or long-running branch, then you'll likely running into the 'We do not build CI environments' error later."
   else
