@@ -34,6 +34,28 @@ CI_PROJECT_NAME=${CI_PROJECT_NAME:-$CIRCLE_PROJECT_REPONAME}
 CI_BUILD=${CI_BUILD:-NO}
 
 # Circle sets both $CIRCLE_PULL_REQUEST and $CI_PULL_REQUEST.
+
+if [ -z "$CI_PULL_REQUEST" ]; then
+  echo "Double checking for PR on $CIRCLE_BRANCH to work around Circle platform bug."
+  # https://discuss.circleci.com/t/circle-pull-requests-environment-variable-not-being-set/29883/10
+  CI_PULL_REQUEST=`
+    curl -s -L \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls?head=$CIRCLE_PROJECT_USERNAME:$CIRCLE_BRANCH&state=open" \
+      | grep -o '/pulls/[0-9]*' \
+      | head -1 \
+      | grep -o '[0-9]*' \
+      || true
+  `
+  if [ -z "$CI_PULL_REQUEST" ]; then
+    echo "No PR found.  If this is not a mainline or long-running branch, then you'll likely running into the 'We do not build CI environments' error later."
+  else
+    echo "Found PR $CI_PULL_REQUEST"
+  fi
+fi
+
 PR_NUMBER=${PR_NUMBER:-$CI_PULL_REQUEST}
 PR_NUMBER=${PR_NUMBER##*/}
 
