@@ -19,6 +19,12 @@ fi
 
 # Check for a system.site.yml file somewhere in the config directory.
 if find ./config -name "system.site.yml" | grep "./config" -q ; then
+  if find ./config -d -name "_splits" | grep "_splits" -q ; then
+    echo "Updating configuration splits"
+    terminus -n drush "$P_SITE.$P_ENV" -- pm-enable config_split
+    terminus -n drush "$P_SITE.$P_ENV" -- config-import --source="../config/_splits" --partial --yes
+    terminus -n drush "$P_SITE.$P_ENV" -- cr
+  fi
   echo "Importing Configuration"
   terminus -n drush "$P_SITE.$P_ENV" -- config-import --yes
 else
