@@ -5,48 +5,56 @@ a hosted site on something like Acquia.
 
 ## TOC
 
-* [Upgrading](#upgrading)
-* [Dependencies](#dependencies)
-* [Installation](#installation)
-* [Configure Environment](#configure-environment)
-   + [Shared](#shared)
+- [Circle CI Starter for Projects](#circle-ci-starter-for-projects)
+  - [TOC](#toc)
+  - [Upgrading](#upgrading)
+  - [Dependencies](#dependencies)
+  - [Installation](#installation)
+  - [Configure Environment](#configure-environment)
+    - [Shared Environment Setup Tasks](#shared-environment-setup-tasks)
       - [Deploy Bot Setup](#deploy-bot-setup)
-         * [Create a GitHub Account for the Deploy Bot](#create-a-github-account-for-the-deploy-bot)
+        - [Create a GitHub Account for the Deploy Bot](#create-a-github-account-for-the-deploy-bot)
       - [Configure an SSH Key](#configure-an-ssh-key)
       - [Get a Github Token](#get-a-github-token)
       - [Configure Environment Variables](#configure-environment-variables)
-   + [Pantheon](#pantheon)
+    - [Pantheon](#pantheon)
       - [Create a Pantheon Account for your Deploy Bot](#create-a-pantheon-account-for-your-deploy-bot)
       - [Set up SSH Key](#set-up-ssh-key)
       - [Get a Terminus Token (or Machine Token)](#get-a-terminus-token-or-machine-token)
       - [Configure More CircleCi Environment Variables](#configure-more-circleci-environment-variables)
-   + [Acquia](#acquia)
+    - [Acquia](#acquia)
       - [Create an Acquia Account for your Deploy Bot](#create-an-acquia-account-for-your-deploy-bot)
-      - [Set up SSH Key](#set-up-ssh-key-1)
-      - [Configure More CircleCi Environment Variables](#configure-more-circleci-environment-variables-1)
-* [Configure CircleCI config.yml](#configure-circleci-configyml)
-   + [Pipeline Parameter Defaults](#pipeline-parameter-defaults)
+      - [Set up SSH Key on Acquia](#set-up-ssh-key-on-acquia)
+      - [Configure More CircleCi Environment Variables to work with Acquia](#configure-more-circleci-environment-variables-to-work-with-acquia)
+    - [Generic Hosting](#generic-hosting)
+      - [Set up SSH Key on CircleCI](#set-up-ssh-key-on-circleci)
+      - [Set up SSH Key on Host Server](#set-up-ssh-key-on-host-server)
+      - [Configure More CircleCi Environment Variables to work with Generic Hosting](#configure-more-circleci-environment-variables-to-work-with-generic-hosting)
+  - [Configure CircleCI config.yml](#configure-circleci-configyml)
+    - [Pipeline Parameter Defaults](#pipeline-parameter-defaults)
       - [php-version](#php-version)
       - [tz](#tz)
       - [host-variant](#host-variant)
-         * [pantheon](#pantheon)
-         * [acquia](#acquia)
-         * [general](#general)
+        - [pantheon](#pantheon-1)
+        - [acquia](#acquia-1)
+        - [general](#general)
       - [docroot](#docroot)
-      - [artifact_workspace](#artifact_workspace)
-   + [Other Configuration](#other-configuration)
-      - [persisting_dirs](#persisting_dirs)
-* [Configurable Environment Variables](#configurable-environment-variables)
-   + [Shared](#shared-1)
-   + [Pantheon Specific](#pantheon-specific)
-   + [Acquia Specific](#acquia-specific)
-* [Helper Environment Variables](#helper-environment-variables)
-* [Configure Composer.json](#configure-composerjson)
-* [Configure Scripts](#configure-scripts)
-   + [Pantheon Specific Scripts](#pantheon-specific-scripts)
-* [Automatic security Updates](#automatic-security-updates)
-   + [Steps to set the keys](#steps-to-set-the-keys)
-   + [Steps to set IA key](#steps-to-set-ia-key)
+      - [artifact\_workspace](#artifact_workspace)
+    - [Other Configuration](#other-configuration)
+      - [persisting\_dirs](#persisting_dirs)
+  - [Configurable Environment Variables](#configurable-environment-variables)
+    - [Shared Variables](#shared-variables)
+    - [Pantheon Specific](#pantheon-specific)
+    - [Acquia Specific](#acquia-specific)
+    - [Generic Hosting Specific](#generic-hosting-specific)
+      - [Must be defined if SITE ALIASES is not defined](#must-be-defined-if-site-aliases-is-not-defined)
+  - [Helper Environment Variables](#helper-environment-variables)
+  - [Configure Composer.json](#configure-composerjson)
+  - [Configure Scripts](#configure-scripts)
+    - [Pantheon Specific Scripts](#pantheon-specific-scripts)
+  - [Automatic Security Updates](#automatic-security-updates)
+    - [Steps to set the keys](#steps-to-set-the-keys)
+    - [Steps to set IA key](#steps-to-set-ia-key)
 
 ## Upgrading
 
@@ -56,7 +64,8 @@ should be easier. With each version upgrade, you should check your
 
 The easiest way to do this is to use a standardized diff tool and diff
 `.circleci/config.yml` with `config.yml`. An example may look like:
-```
+
+```bash
 diff -u --color .circleci/config.yml ./vendor/fourkitchens/pots/config.yml
 ```
 
@@ -68,7 +77,8 @@ This package expects your project to have the following support scaffolding to
 run out of the box:
 
 - the composer scripts lint and code-sniff. Example:
-  ```
+
+  ```json
    "scripts": {
       "lint": [
          "./node_modules/.bin/eslint ./",
@@ -79,12 +89,15 @@ run out of the box:
       ]
    }
   ```
+
 - package.json with a build-theme script. Example:
-   ```
+
+   ```json
       "scripts": {
          "theme-build": "cd ./docroot/themes/custom/sdsu && npm run build"
       }
    ```
+
 - package.lock or shrinkwrap.
 - preferably a .nvmrc
 - .gitignore files with cut lines in them to distinguish source from artifact.
@@ -94,23 +107,25 @@ Set up of the Circle tasks assumes you are doing this with a bot user. Please
 ensure that the bot user you are using has account on both the GitHub
 organization where your site lives and the hosting provider. You will
 need:
- - the ability to log in as the bot user in GitHub and on the hosting provider
- - an SSH Key (private and public)
- - an api or machine token for the hosting tooling such as terminus or acli
+
+- the ability to log in as the bot user in GitHub and on the hosting provider
+- an SSH Key (private and public)
+- an api or machine token for the hosting tooling such as terminus or acli
 
 ## Installation
 
 1. Install the package and copy over the template config.yml
 
-    ```
+    ```bash
     composer require fourkitchens/pots
     mkdir .circleci
     cp vendor/fourkitchens/pots/config.yml .circleci/config.yml
     ```
+
 2. Make sure your composer.json and package.json meet the requirements of the
    default scripts.
 3. Push the changes to a public GitHub branch.
-4. Log in to https://app.circleci.com/
+4. Log in to [CircleCI](https://app.circleci.com/)
 5. Navigate to the organization that your site's code lives under by clicking
    the icon in the top left corner where your name is and selecting the correct
    one.
@@ -124,15 +139,17 @@ need:
 12. Click "Set Up Project"
 
 The first pass will always fail. Move on to configuration.
+
 ## Configure Environment
 
 There are some configuration steps that are shared between hosting environments.
 Make sure to check out the settings specific to the environment you are pushing
 to.
 
-### Shared
+### Shared Environment Setup Tasks
 
 #### Deploy Bot Setup
+
 A Deploy Bot user will be needed. This tooling assumes Bender (the Four Kitchens
 deploy bot) as the default, but does not provide any credentials you need to set
 the tooling up. Ask a Web Chef about Bender, have the organization you are
@@ -140,8 +157,9 @@ working with create a new bot, or create the new bot for them using the steps
 below. You will need to log in as this bot to do some of the configuration.
 
 ##### Create a GitHub Account for the Deploy Bot
+
 1. Open a new browser instance or log out of your current GitHub instance.
-2. Go to https://github.com/join.
+2. Go to [Github](https://github.com/join).
 3. Type a username, your email address, and a password. NOTE: Make sure the
    email address you enter goes to a real email account. If you use gmail, it is
    possible to have multiple "addresses" go to the same account using the `+` in
@@ -152,13 +170,14 @@ below. You will need to log in as this bot to do some of the configuration.
    the site, [invite the bot user to the organization](https://docs.github.com/en/organizations/managing-membership-in-your-organization/inviting-users-to-join-your-organization#inviting-a-user-to-join-your-organization).
 
 #### Configure an SSH Key
+
 An SSH key is needed to be able to push commits from circleci to the hosting
 provider's git repository. In some instances, the same ssh key is also needed
 to be able to ssh into the hosting platform itself. Ask the client to generate
 an ssh key pair or [generate](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent#generating-a-new-ssh-key)
 and securely provide the ssh key pair to the client.
 
-1. Log in to https://app.circleci.com/
+1. Log in to [CircleCI](https://app.circleci.com/)
 2. Navigate to the organization that your site's code lives under by clicking
    the icon in the top left corner where your name is and selecting the correct
    one.
@@ -179,6 +198,7 @@ and securely provide the ssh key pair to the client.
     `ssh-keygen -l -E md5 -f id_rsa` where idrsa is the filename of your key.
 
 #### Get a Github Token
+
 You must have a GitHub token so the Deploy Bot can post comments back to commits
 or pull requests. This allows it to provide links and information about the
 environments it created.
@@ -198,11 +218,11 @@ Here you will configure the common environment variables. Hosting specific
 variables and steps will be provided farther down. The variables to configure
 are as follows.
 
-* `GITHUB_TOKEN` A GitHub access token so the bot user can comment back on the
+- `GITHUB_TOKEN` A GitHub access token so the bot user can comment back on the
   commit.
-* `GIT_EMAIL` An arbitrary email that will be used as the committer when
+- `GIT_EMAIL` An arbitrary email that will be used as the committer when
   building the artifact.
-* `CANONICAL_ENV` The environment to get canonical database and files from.
+- `CANONICAL_ENV` The environment to get canonical database and files from.
 
 If you skipped here, make sure you follow steps 1-6 of "Configure an SSH Key" to
 get to Circle's Project Settings"
@@ -221,8 +241,8 @@ get to Circle's Project Settings"
 
 ### Pantheon
 
-* `SITE_NAME`: The Pantheon site id used to run terminus commands.
-* `TERMINUS_TOKEN`: The Pantheon Machine Token used to operate terminus.
+- `SITE_NAME`: The Pantheon site id used to run terminus commands.
+- `TERMINUS_TOKEN`: The Pantheon Machine Token used to operate terminus.
 
 #### Create a Pantheon Account for your Deploy Bot
 
@@ -241,11 +261,13 @@ deployments are linked to any one pantheon user.
 10. Accept the invitation.
 
 #### Set up SSH Key
+
 Your bot will need an ssh key configured to be able to push commits to Pantheon.
 Use the public key of the pair generated in the "Configure an SSH Key" section.
 
 Log out of your Pantheon account or use a separate browser instance to follow
 the instructions from Pantheon to [Add Your SSH Key to Pantheon](https://pantheon.io/docs/ssh-keys#add-your-ssh-key-to-pantheon).
+
 #### Get a Terminus Token (or Machine Token)
 
 1. In the same browser instance as above, follow the instructions from Pantheon
@@ -254,6 +276,7 @@ to [Create a Machine Token](https://pantheon.io/docs/machine-tokens#create-a-mac
    be displayed once.
 
 #### Configure More CircleCi Environment Variables
+
 1. Navigate back to your CircleCI -> Project Settings -> Environment Variables
    browser instance.
 2. Click "Add Environment Variable"
@@ -270,14 +293,16 @@ to [Create a Machine Token](https://pantheon.io/docs/machine-tokens#create-a-mac
 9. Click "Add Environment Variable" to accept the changes.
 
 ### Acquia
-* `SITE_NAME`: The acquia site id used to run Acquia Cloud API commands.
-* `ACQUIA_REALM`: The Cloud API Realm. Usually "prod" or "devcloud".
-* `ACQUIA_REPO`: The Acquia git repo.
+
+- `SITE_NAME`: The acquia site id used to run Acquia Cloud API commands.
+- `ACQUIA_REALM`: The Cloud API Realm. Usually "prod" or "devcloud".
+- `ACQUIA_REPO`: The Acquia git repo.
+
 #### Create an Acquia Account for your Deploy Bot
 
 **TODO: FILL OUT THIS BIT**
 
-#### Set up SSH Key
+#### Set up SSH Key on Acquia
 
 Your bot will need an ssh key configured to be able to push commits to Acquia.
 Use the public key of the pair generated in the "Configure an SSH Key" section.
@@ -285,7 +310,8 @@ Use the public key of the pair generated in the "Configure an SSH Key" section.
 Log out of your Acquia account or use a separate browser instance to follow
 the instructions from Acquia to [Add a public key to an Acquia profile](https://docs.acquia.com/cloud-platform/manage/ssh/enable/add-key/).
 
-#### Configure More CircleCi Environment Variables
+#### Configure More CircleCi Environment Variables to work with Acquia
+
 1. Navigate back to your CircleCI -> Project Settings -> Environment Variables
    browser instance.
 2. Click "Add Environment Variable".
@@ -304,19 +330,59 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
     **TODO:** FLESH THIS OUT MORE WITH HELP ON HOW TO GET IT
 13. Click "Add Environment Variable" to accept the changes.
 14. Click "Add Environment Variable".
-15. Type "ZD_REQUESTER_ID" in the name.
-16. Type Client requester id into "Value". The user ID can be obtained from the user's url. e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
-17. Click "Add Environment Variable" to accept the changes.
-18. Click "Add Environment Variable".
-19. Type "ZD_TOKEN" in the name.
-20. Type Zendesk token value id into "Value". This token is stored into 1password.
-21. Click "Add Environment Variable" to accept the changes.
-22. Click "Add Environment Variable".
-23. Type "ZD_LEAD_EMAIL" in the name.
-24. Type Project lead email value id into "Value". The projects lead email.
-25. Click "Add Environment Variable" to accept the changes.
+
+### Generic Hosting
+
+#### Set up SSH Key on CircleCI
+
+Unlike other hosting options, we commit the artifact builds back to the original
+repository to a branch with the same name as the one you are working on prefixed
+with `deploy-`. To do this, you must either add a User Key as your bot user or
+provide an additional ssh key that allows your bot user to commit back to
+Github.
+
+#### Set up SSH Key on Host Server
+
+This will depend on your hosting provider and may not be necessary, but you will
+need to know **how** to connect to your production host via ssh so that your
+bot user can push the code live and run backups.
+
+#### Configure More CircleCi Environment Variables to work with Generic Hosting
+
+1. Create a file, self.site.yml that looks a bit like this example:
+
+   ```yaml
+      # Edit or remove this file as needed.
+      # Docs at https://github.com/drush-ops/drush/blob/master/examples/example.site.yml
+
+      prod:
+      host: 123.4.5.678
+      user: deploy-bot
+      root: /var/www/html/web
+      uri: https://example.com
+      paths:
+         drush-script: /var/www/html/web/vendor/bin/drush
+      ssh:
+         options: -p 65002
+   ```
+
+2. run `base64 -w 0 self.site.yml`. The output will look something like:
+
+   ```text
+      IyBFZGl0IG9yIHJlbW92ZSB0aGlzIGZpbGUgYXMgbmVlZGVkLgojIERvY3MgYXQgaHR0cHM6Ly9naXRodWIuY29tL2RydXNoLW9wcy9kcnVzaC9ibG9iL21hc3Rlci9leGFtcGxlcy9leGFtcGxlLnNpdGUueW1sCgpwcm9kOgpob3N0OiAxMjMuNC41LjY3OAp1c2VyOiBkZXBsb3ktYm90CnJvb3Q6IC92YXIvd3d3L2h0bWwvd2ViCnVyaTogaHR0cHM6Ly9leGFtcGxlLmNvbQpwYXRoczoKICAgIGRydXNoLXNjcmlwdDogL3Zhci93d3cvaHRtbC93ZWIvdmVuZG9yL2Jpbi9kcnVzaApzc2g6CiAgICBvcHRpb25zOiAtcCA2NTAwMgo=
+   ```
+
+3. Copy the output
+4. Navigate back to your CircleCI -> Project Settings -> Environment Variables
+   browser instance.
+5. Click "Add Environment Variable".
+6. Type "SITE_ALIASES" in the name.
+7. Paste your output from above into "Value".
+8. Click "Add Environment Variable" to accept the changes.
+9. Click "Add Environment Variable".
 
 ## Configure CircleCI config.yml
+
 There are many options you have, some shared, and some hosting specific.
 
 ### Pipeline Parameter Defaults
@@ -328,14 +394,17 @@ the repository that houses your .circleci/config.yml.
 
 In each one, change the value after the `default:` key. For example, to change
 the docroot across the whole project, change:
-```
+
+```yaml
   docroot:
     description: "Where composer installs drupal."
     default: "web"
     type: string
 ```
+
 to
-```
+
+``` yaml
   docroot:
     description: "Where composer installs drupal."
     default: "docroot" #NOTE I CHANGED THIS
@@ -343,7 +412,9 @@ to
 ```
 
 The following parameters exist:
+
 #### php-version
+
 This is a string that represents the version number for PHP version to use
 across the entire build.
 
@@ -356,12 +427,14 @@ On other hosting platforms, you can use a three digit version number
 allowed.
 
 #### tz
+
 This is a string that represents the timezone. This may be important so that
 jobs that do time calculations, print time stamps, or make commits are accurate.
 See a [full list of timezone values](https://vdc-repo.vmware.com/vmwb-repository/dcr-public/3d076a12-29a2-4d17-9269-cb8150b5a37f/8b5969e2-1a66-4425-af17-feff6d6f705d/doc/timezone.html)
 to find an appropriate one for you to use.
 
 #### host-variant
+
 This affects how the whole build behaves and what configurations are available
 to you. The current options are "pantheon", "acquia", and "general". All our workflows
 will provide you with "Artifact Build", committed the appropriate
@@ -369,6 +442,7 @@ repository. This allows you to use Git history to follow a build back to the sou
 commit we use in development.
 
 ##### pantheon
+
 Pantheon provides you a workflow that builds multidev environments, options
 around development branches, and a workflow to deploy code via approval through
 the CircleCI user interface. The deploy process provided by this setting creates
@@ -378,6 +452,7 @@ plugin. These changes are committed only to the Pantheon git repository and not
 to your "Source Repository", the one you create coding changes in.
 
 ##### acquia
+
 Acquia provides you a very minimal workflow, however, it does provide
 [acquia cli](https://github.com/acquia/cli) as part of the build. This allows
 you to use supporting deploy methods like our [cloud hooks](https://github.com/fourkitchens/acquia-cloud-hooks)
@@ -388,18 +463,21 @@ commands. These changes are committed only to the Acquia git repository and not
 to your "Source Repository", the one you create coding changes in.
 
 ##### general
+
 General provides you with the barest of deployments, committing an artifact
 build back to your source repository under a new branch that follows the naming
 convention `deploy-{BRANCHNAME}`. Example, if your branch is named `test`, you
 will have an artifact build committed to the `deploy-test` branch.
 
 #### docroot
+
 This setting should be set to the folder where your Drupal installation resides.
 This should mirror the setting in `extra.drupal-scaffold.locations.web-root`.
 This is typically either `web` for Pantheon and `docroot` for Acquia, but can
 be any number of things like `public_html` for generic hosts.
 
 #### artifact_workspace
+
 This setting moves where the built artifact should be. This is particularly
 helpful when you want to pick and choose items from the build versus just
 sending the whole artifact to your host. The `~/project` directory is always
@@ -416,6 +494,7 @@ you to modify your config.yml directly if you wish to change them temporally
 or permanently.
 
 #### persisting_dirs
+
 There are the directories that you want to be copied in full from the build
 portion of the workflow to the deploy portion of the workflow. You will
 sometimes want to include other root directories that aren't included like
@@ -431,23 +510,23 @@ however, it hides some of the toggles you may be using. Per best practices,
 make sure any secret is configured in the CircleCI UI. We also include all
 mandatory environment variables in this way as well.
 
-### Shared
+### Shared Variables
 
-* `GITHUB_TOKEN`: **Mandatory** A GitHub access token so the bot user can comment back on the
+- `GITHUB_TOKEN`: **Mandatory** A GitHub access token so the bot user can comment back on the
    commit or PR, and remove unneeded multidevs.
-* `SITE_NAME`: The Pantheon or Acquia site id used to run terminus/acli
+- `SITE_NAME`: The Pantheon or Acquia site id used to run terminus/acli
    commands. Defaults to the GitHub repo name.
-* `GIT_EMAIL`: An arbitrary email that will be used as the committer when
+- `GIT_EMAIL`: An arbitrary email that will be used as the committer when
    building the artifact. Defaults to `bender@fourkitchens.com`
-* `CANONICAL_ENV`: Environment to get canonical database and files from
+- `CANONICAL_ENV`: Environment to get canonical database and files from
    Possible Values:
-   * Acquia: dev, test, prod
-   * Pantheon: dev, test, live
+  - Acquia: dev, test, prod
+  - Pantheon: dev, test, live
 
-   Default: "prod" on Acquia. "live" on Pantheon
-* `SANITIZE_SCRIPT`: Script used to sanitize databases. Only used when
+   Default: "prod" on Acquia. "live" on Pantheon and generic.
+- `SANITIZE_SCRIPT`: Script used to sanitize databases. Only used when
    `CANONICAL_ENV` is not dev. There is no default.
-* `SYNC_CONFIG`: The ability to turn configuration sync on or off. By default,
+- `SYNC_CONFIG`: The ability to turn configuration sync on or off. By default,
    Yes if Any directory in the ./config directory (inclusive) contains
    `system.site.yml`. Ex: YES if `./config/system.site.yml` or
    `./config/default/system.site.yml` or `./config/sync/system.site.yml`
@@ -455,45 +534,67 @@ mandatory environment variables in this way as well.
 
 ### Pantheon Specific
 
-* `TERMINUS_TOKEN`: **Mandatory** The Pantheon machine token.
-* `CI_BUILD`: Build CI multidevs on every commit on Pantheon. This way you get
+- `TERMINUS_TOKEN`: **Mandatory** The Pantheon machine token.
+- `CI_BUILD`: Build CI multidevs on every commit on Pantheon. This way you get
    the ci-* environments. This may be useful for visual regression testing or
    workflows without PRs. Defaults to `NO`. Possible values are `YES` and `NO`.
-* `MAIN_BRANCH`: Define the main branch releases are cut from. Defaults to
+- `MAIN_BRANCH`: Define the main branch releases are cut from. Defaults to
    `main` if the branch exists, `master` otherwise.
-* `DEVELOPMENT_BRANCH`: Define the development branch where active development
+- `DEVELOPMENT_BRANCH`: Define the development branch where active development
    happens on GitHub. This branch is used most in gitflow development patterns.
    Defaults to `develop`.
-* `REBUILD_MULTIDEV_ENV_EVERY_PUSH`: Re-sync content for multidevs every time a
+- `REBUILD_MULTIDEV_ENV_EVERY_PUSH`: Re-sync content for multidevs every time a
    push is made to Pantheon. Defaults to `NO`. Possible values are `YES` and
    `NO`.
-* `REBUILD_DEVELOPMENT_ENV_EVERY_PUSH`: Re-sync content for the GitHub
+- `REBUILD_DEVELOPMENT_ENV_EVERY_PUSH`: Re-sync content for the GitHub
    development multidev on Pantheon every time a push is made to
    `DEVELOPMENT_BRANCH` branch. Defaults to `NO`. Possible values are `YES` and
    `NO`.
-* `DEVELOPMENT_ENV`: Define the name of the multidev used for the GitHub
+- `DEVELOPMENT_ENV`: Define the name of the multidev used for the GitHub
    development branch. Must follow the multidev naming conventions for Pantheon.
    Defaults to `github-dev`.
 
 ### Acquia Specific
 
-* `ACQUIA_REPO`: **Mandatory** The address of the Acquia git repo. Example:
+- `ACQUIA_REPO`: **Mandatory** The address of the Acquia git repo. Example:
    `sitename@svn-21939.prod.hosting.acquia.com:sitename.git`.
-* `ACQUIA_REALM`: **Mandatory** The Acquia Cloud API Realm.
+- `ACQUIA_REALM`: **Mandatory** The Acquia Cloud API Realm.
    Usually "prod" or "devcloud".
    See [documentation](https://docs.acquia.com/acquia-cloud/api#realm).
    Defaults to `prod`.
 
+### Generic Hosting Specific
+
+- `DRUSH_CMD`: alternative location for drush on CircleCI
+- `BACKUP_SCRIPT_PATH`: Absolute path on the CircleCI environment used to define
+   a custom backup script to be injected to the remote environment.
+- `DEPLOY_SCRIPT_PATH`: Absolute path on the CircleCI environment used to define
+   a custom DEPLOY script to be injected to the remote environment.
+- `REMOTE_BACKUP_DIRECTORY`: The directory to store backups of production.
+   Defaults to `$REMOTE_PROJECT_ROOT/backups`
+- `SITE_ALIASES`: A base64 encoded site's alias file using a command like
+   `base64 -w 0 self.site.yml`
+
+#### Must be defined if SITE ALIASES is not defined
+
+- `SSH_COMMAND_LIVE`: alternative to using the `SITE_ALIASES` variable. a
+   straight ssh command like `ssh -p 1234 user@example.com -i /path/to/key`
+- `REMOTE_PROJECT_ROOT`: the remote path in which the root of the drupal project
+   lives. Not the docroot.
+- `REMOTE_DRUSH_CMD`: specify if you don't in the `SITE_ALIASES` variable or use
+   `SSH_COMMAND_LIVE`. defaults to `$REMOTE_PROJECT_ROOT/vendor/bin/drush`
+
 ## Helper Environment Variables
+
 These environment variables are unconfigurable. They are set to help you with
 developing scripts on your own. Some contain the values of the pipeline
 parameters previously mentioned.
 
-* `HOST_VARIANT`: Contains the value provided by the host-variant pipeline
+- `HOST_VARIANT`: Contains the value provided by the host-variant pipeline
    parameter.
-* `DATE_TIMEZONE`: Contains the value provided by the tz pipeline parameter.
-* `DOCROOT`: Contains the value provided by the docroot pipeline parameter.
-* `TERM`: "xterm"
+- `DATE_TIMEZONE`: Contains the value provided by the tz pipeline parameter.
+- `DOCROOT`: Contains the value provided by the docroot pipeline parameter.
+- `TERM`: "xterm"
 
 ## Configure Composer.json
 
@@ -501,10 +602,11 @@ There are 2 scripts that the default scripts require you to build so that it's
 reusable across the project. You must be able to run the following commands in
 your project.
 
-```
+```bash
 composer run lint
 composer run code-sniff
 ```
+
 See the [Dependencies](https://github.com/fourkitchens/pots#dependencies) section for examples.
 
 ## Configure Scripts
@@ -550,7 +652,7 @@ The scripts available for overload are as follows:
    production environment. By default, this provides backup services, the
    "deploy" services as well as a standard deploy.
 
-## Automatic Security Updates.
+## Automatic Security Updates
 
 POTS contains steps and scripts to automatically look for security updates and install them into the different contributed projects.
 
@@ -561,7 +663,6 @@ To make it trigger recluntly we have a couple of options:
 - Evercurrent (Recommended)
 - CircleCi triggers interface
 
-
 To make the Automatic security updates works for our project, we will require to follow the next steps:
 
 - Create a new set of SSH keys to be able to push the changes back to github (github deploy key)
@@ -569,6 +670,7 @@ To make the Automatic security updates works for our project, we will require to
 - (Optional) Configure the the IA integration (Open IA)
 
 ### Steps to set the keys
+
 When continuous integration is configured on a project, CircleCI generates a set of SSH keys and automatically adds the private key to CircleCI and the public key to GitHub. This way CircleCI will have access to the repository in GitHub, but this access is just read-only. Originally for POTS this access is enough since it only needs reading the repository on GitHub and writing on the platform where the website is hosted (Acquia, Pantheon, Platform, etc).
 
 With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, because AutoSec requires reading the repository, executing the security updates, and sending the changes to GitHub, therefore starting with AutoSec it is necessary to have read/write keys. CircleCI cannot generate keys with write access, therefore it is necessary to externally create a set of SSH keys and manually add them to both CircleCI and GitHub.
