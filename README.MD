@@ -1,7 +1,15 @@
 # Circle CI Starter for Projects
 
 This Composer package provides the starts for what you need to test and deploy
-a hosted site on something like Acquia.
+a hosted site on something like Acquia, Pantheon, or elsewhere.
+
+## What does POTS stand for?
+Whatever you want it to stand for.  Here's some options:
+* Push On To Site
+* Party On That Site
+* Perform On The Server
+* People Overlook This Stuff
+* ProjectCI Onward To Standardization
 
 ## TOC
 
