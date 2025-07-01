@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -eo pipefail
+
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+
+# Check for a system.site.yml file somewhere in the config directory.
+if find ./config -name "system.site.yml" | grep "./config" -q ; then
+  echo "Importing Configuration"
+  $DRUSH_CMD config-import --yes
+else
+  echo "We didn't import any configuration."
+fi
+
+# Clear Drupal cache
+echo "Clearing Drupal cache again."
+$DRUSH_CMD cr

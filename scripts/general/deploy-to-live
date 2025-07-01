@@ -1,0 +1,129 @@
+#!/bin/bash
+
+set -eo pipefail
+
+# Allow CircleCI to forward any SSH Keys so the remote server can pull from git.
+mkdir -p ~/.ssh
+printf "Host *\nForwardAgent yes\nStrictHostKeyChecking no" >> ~/.ssh/config
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+if [[ -z "$DOCROOT" ]]; then
+  DOCROOT=web
+fi
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+if [[ -z "$SYNC_CONFIG" ]]; then
+  SYNC_CONFIG="YES"
+fi
+if [[ -z "$CANONICAL_ENV" ]]; then
+  CANONICAL_ENV=live
+fi
+
+# Check for an SSH command to see if we need to scavange for a aliases file.
+if [[ -z "$SSH_COMMAND_LIVE" ]]; then
+  # Default to using `drush @self.$REMOTE_ENV_NAME`
+  if [ -n "$REMOTE_ENV_NAME" ] && $DRUSH_CMD sa "@self.$REMOTE_ENV_NAME"; then
+    DRUSH_SITE_ALIAS=$REMOTE_ENV_NAME;
+  # Default to using `drush @self.live`
+  elif $DRUSH_CMD sa @self.live; then
+    DRUSH_SITE_ALIAS="live";
+    REMOTE_ENV_NAME="live"
+  # Default to using `drush @self.prod`
+  elif $DRUSH_CMD sa @self.prod; then
+    DRUSH_SITE_ALIAS="prod";
+    REMOTE_ENV_NAME="prod"
+  fi
+  # Install JQ so we can parse json from drush to get information about the
+  # alias.
+  if ! command -v jq &> /dev/null; then
+    sudo apt-get update -y
+    sudo apt-get install jq
+  fi
+   # Rebuilds the SSH command and gets reasonable defaults from the drush alias.
+  DRUSH_SSH_OPTIONS="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --format=json | jq -r ".[\"@self.$DRUSH_SITE_ALIAS\"].ssh.options" )"
+  if [[ "$DRUSH_SSH_OPTIONS" == "null" ]]; then
+    DRUSH_SSH_OPTIONS="-o 'StrictHostKeyChecking no'"
+  fi
+
+  # The SSH User in the alias file.
+  DRUSH_USER="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --format=json | jq -r ".[\"@self.$DRUSH_SITE_ALIAS\"].user" )"
+  if [[ "$DRUSH_USER" == "null" ]]; then
+    echo "You must specify a user in your site alias yaml or set \$SSH_COMMAND_LIVE"
+    exit 1
+  fi
+
+  # The Host we need to connect to from the alias file.
+  DRUSH_HOST="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --format=json | jq -r ".[\"@self.$DRUSH_SITE_ALIAS\"].host" )"
+  if [[ "$DRUSH_HOST" == "null" ]]; then
+    echo "You must specify a host in your site alias yaml or set \$SSH_COMMAND_LIVE"
+    exit 1
+  fi
+
+  # Lets grab the remote drush command if it's specified. If it's not, this
+  # falls through and makes the remote drush path `./vendor/bin/drush` down
+  # at the bottom of this script.
+  if [[ -z "$REMOTE_DRUSH_CMD" ]]; then
+    REMOTE_DRUSH_CMD="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --format=json | jq -r ".[\"@self.$DRUSH_SITE_ALIAS\"].paths.\"drush-script\"" )"
+    if [[ "$REMOTE_DRUSH_CMD" == "null" ]]; then
+      unset REMOTE_DRUSH_CMD;
+    else
+      # If we find the path, we need to make sure it's an absolute path so we
+      # know where it is because otherwise, it comes from a directory relative
+      # to what ever the root for the ssh user is set to.
+      case $REMOTE_DRUSH_CMD in
+        /*) echo "absolute path" ;;
+        *) echo "The remote drush script is realitive in the site alias. This likely means it's from the home directory. I have no idea how to convert that to be from the project directory. Use an absolute path."; exit 1 ;;
+      esac
+    fi
+  fi
+
+  # In some cases the webroot provided by drush is a symlink in a totally
+  # different folder, so lets not clobber what ever someone set.
+  if [ -n "$DRUSH_SITE_ALIAS" ] && [ -z "$REMOTE_PROJECT_ROOT" ]; then
+    REMOTE_PROJECT_ROOT="$( $DRUSH_CMD sa "@self.$DRUSH_SITE_ALIAS" --fields root | grep "root:.*\$" | sed "s/[[:space:]]*root\: \(.*\)\/$DOCROOT/\1/g" )"
+    echo "REMOTE_PROJECT_ROOT set to $REMOTE_PROJECT_ROOT"
+  fi
+
+  # We have to break this out instead of using `drush ssh` because drush ssh
+  # won't let us inject a local script remotely. like we do at the bottom of
+  # this script. This may not be an exact replica of how Drush gets their
+  # ssh command. 🛑 There be 🐉 here.
+  SSH_COMMAND_LIVE="ssh -t $DRUSH_SSH_OPTIONS $DRUSH_USER@$DRUSH_HOST"
+
+fi
+if [[ -z "$REMOTE_PROJECT_ROOT" ]]; then
+  echo "You must define \$REMOTE_PROJECT_ROOT as an environment variable or provide a drush site alias for @self.live with ssh information."
+  exit 1;
+fi
+if [[ -z "$REMOTE_ENV_NAME" ]]; then
+  REMOTE_ENV_NAME="live"
+fi
+
+if [[ -z "$DEPLOY_BRANCH" ]]; then
+  DEPLOY_BRANCH="$CIRCLE_BRANCH"
+fi
+
+if [[ -z "$BACKUP_SCRIPT_PATH" ]]; then
+  BACKUP_SCRIPT_PATH="$SCRIPT_DIR/remote/backup"
+fi
+if [[ -z "$DEPLOY_SCRIPT_PATH" ]]; then
+  DEPLOY_SCRIPT_PATH="$SCRIPT_DIR/remote/remote_deploy"
+fi
+if [[ -z "$REMOTE_BACKUP_DIRECTORY" ]]; then
+  REMOTE_BACKUP_DIRECTORY="$REMOTE_PROJECT_ROOT/backups"
+fi
+if [[ -z "$REMOTE_DRUSH_CMD" ]]; then
+  REMOTE_DRUSH_CMD="./vendor/bin/drush"
+fi
+
+if [[ $REMOTE_ENV_NAME == "prod" ]] || [[ $REMOTE_ENV_NAME == "live" ]]; then
+  $SSH_COMMAND_LIVE "bash -s " < "$BACKUP_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$REMOTE_DRUSH_CMD";
+else
+  #TODO Add ELSE logic here to pull backup from production to another enviornment
+  echo "Creating a backup from $CANONICAL_ENV to import into $REMOTE_ENV_NAME."
+  #Might be able to do s a drush-sync here. consider that the other env may not be on the same server.
+  #ssh $SSH_COMMAND_DEV "bash -s " < "$BACKUP_SCRIPT_PATH" "$CANONICAL_ENV" "$CANONICAL_REMOTE_PROJECT_ROOT" "$REMOTE_BACKUP_DIRECTORY" "$REMOTE_DRUSH_CMD";;
+  echo "Importing a backup from the canonical environment to $REMOTE_ENV_NAME"
+fi
+$SSH_COMMAND_LIVE "bash -s " < "$DEPLOY_SCRIPT_PATH" "$REMOTE_ENV_NAME" "$REMOTE_PROJECT_ROOT" "$DEPLOY_BRANCH" "$DOCROOT" "$REMOTE_DRUSH_CMD" "$SYNC_CONFIG";

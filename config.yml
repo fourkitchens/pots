@@ -315,6 +315,26 @@ jobs:
       - deploy-to-pantheon-env:
           environment: 'live'
 
+  deploy_to_live_general:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run:
+          name: Deploy to live
+          command: |
+            if [ -f "./.circleci/scripts/deploy-to-live" ]; then
+              ./.circleci/scripts/deploy-to-live
+            else
+              ./vendor/fourkitchens/pots/scripts/general/deploy-to-live
+            fi
 
   security_updates_check:
     <<: *defaults
@@ -332,6 +352,7 @@ jobs:
       - checkout
       - php/install-composer
       - php/install-packages
+      - add_ssh_keys
       - run:
           name: setup-environment-vars
           command: |
@@ -340,7 +361,6 @@ jobs:
             else
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
-      - add_ssh_keys
       - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
       - run:
           name: Check security updates
@@ -444,8 +464,7 @@ workflows:
                 - 'master'
   build-deploy-acquia:
     when:
-      not:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      equal: [ acquia, << pipeline.parameters.host-variant >> ]
     jobs:
       - static_tests
       - build
@@ -453,13 +472,48 @@ workflows:
           requires:
             - static_tests
             - build
+      - release:
+          requires:
+          - deploy
           filters:
             branches:
               only:
-                - main
-                - master
-                - develop
-                - /release-.*/
+                - 'main'
+                - 'master'
+  build-deploy-general:
+    when:
+      equal: [ general, << pipeline.parameters.host-variant >> ]
+    jobs:
+      - static_tests:
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - build:
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - deploy:
+          requires:
+            - static_tests
+            - build
+          filters:
+            branches:
+              ignore: /^deploy-.*$/
+      - approve_deploy_to_live:
+          type: approval
+          filters:
+            branches:
+              only:
+                - 'deploy-main'
+                - 'deploy-master'
+      - deploy_to_live_general:
+          requires:
+            - approve_deploy_to_live
+          filters:
+            branches:
+              only:
+                - 'deploy-main'
+                - 'deploy-master'
       - release:
           requires:
           - deploy

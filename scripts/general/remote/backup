@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -eo pipefail
+
+REMOTE_ENV_NAME="$1"
+HOSTING_PATH="$2"
+BACKUP_DIRECTORY="$3"
+DRUSH_CMD="$4"
+
+if [[ -z "$REMOTE_ENV_NAME" ]]; then
+  echo "Argument 1: Remote Env Name is missing."
+  exit 1
+fi
+if [[ -z "$HOSTING_PATH" ]]; then
+  echo "Argument 2: Hosting Path is missing."
+  exit 1
+fi
+if [[ -z "$BACKUP_DIRECTORY" ]]; then
+  BACKUP_DIRECTORY="$HOME/backups"
+fi
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+
+echo "Moving to $HOSTING_PATH"
+cd "$HOSTING_PATH"
+
+
+if $DRUSH_CMD status | grep "Drupal version"; then
+  echo "Drush will be run as '$DRUSH_CMD'"
+else
+  echo "$DRUSH_CMD is failing to bootstrap drupal. The build may not be complete. Aborting."
+  exit 1;
+fi
+
+if [[ -f ./vendor/bin/drush ]]; then
+  if [[ ! -d "$BACKUP_DIRECTORY" ]]; then
+    echo "BACKUP DIRECTORY $BACKUP_DIRECTORY doesn't exit. Attempting to create it."
+    mkdir -p "$BACKUP_DIRECTORY"
+  else
+    echo "BACKUP DIRECTORY $BACKUP_DIRECTORY does exit. Moving on."
+  fi
+  BACKUP_FILE="$BACKUP_DIRECTORY/$REMOTE_ENV_NAME-$( date +"%F_%T" ).sql.gz"
+  echo "Backing up DB for $HOSTING_PATH at $BACKUP_FILE"
+
+  if [ -d "$BACKUP_DIRECTORY" ] && $DRUSH_CMD sql:dump --structure-tables-list=cache,cache_*  --extra-dump=--no-tablespaces | gzip > "$BACKUP_FILE" && [ -s "$BACKUP_FILE" ]; then
+    echo "Backup successful"
+  else
+    echo "A backup was not successfully made."
+    exit 1;
+  fi
+  if [ -f "$BACKUP_DIRECTORY/newest.sql.gz" ]; then
+    rm "$BACKUP_DIRECTORY/newest.sql.gz"
+  fi
+  ln -s "$BACKUP_FILE" "$BACKUP_DIRECTORY/newest.sql.gz"
+else
+  echo "./vendor/bin/drush doesn't exist. Must be the first time a deployment has ever happened."
+fi

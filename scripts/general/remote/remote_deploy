@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -eo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+HOSTING_ENV=$1
+HOSTING_PATH=$2
+RELEASE_BRANCH=$3
+DOCROOT=$4
+DRUSH_CMD=$5
+SYNC_CONFIG=$6
+
+if [[ -z "$HOSTING_ENV" ]]; then
+  echo "Argument 1: Hosting Env is missing."
+  exit 1
+fi
+if [[ -z "$HOSTING_PATH" ]]; then
+  echo "Argument 2: Hosting Path is missing."
+  exit 1
+fi
+if [[ -z "$RELEASE_BRANCH" ]]; then
+  echo "Argument 3: Release Branch is missing."
+  exit 1
+fi
+if [[ -z "$DOCROOT" ]]; then
+  DOCROOT=web
+fi
+
+if [[ -z "$DRUSH_CMD" ]]; then
+  DRUSH_CMD='./vendor/bin/drush'
+fi
+
+echo "Moving to $HOSTING_PATH"
+cd "$HOSTING_PATH"
+
+if $DRUSH_CMD status | grep "Drupal version"; then
+  echo "Drush will be run as '$DRUSH_CMD'"
+else
+  echo "$DRUSH_CMD is failing to bootstrap drupal. The build may not be complete. Aborting."
+  exit 1;
+fi
+
+echo "Resetting site/default to writable so we can update settings files."
+chmod u+w $DOCROOT/sites/default $DOCROOT/sites/default/*.*
+
+echo "Fetch and checkout release using git."
+git fetch --all || exit
+git checkout -f origin/$RELEASE_BRANCH
+git clean -fd
+
+if [ -f "./.circleci/scripts/drush-commands" ]; then
+  ./.circleci/scripts/drush-commands "$HOSTING_PATH" "$DRUSH_CMD" "$SYNC_CONFIG"
+else
+  ./vendor/fourkitchens/pots/scripts/general/remote/drush-commands "$HOSTING_PATH" "$DRUSH_CMD" "$SYNC_CONFIG"
+fi
+
+echo "Reset sites/default to the way it was"
+chmod a-w $DOCROOT/sites/default $DOCROOT/sites/default/*.*
