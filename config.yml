@@ -355,6 +355,57 @@ jobs:
               fi
               echo "Script done"
 
+  playwright-test:
+    <<: *defaults
+    docker:
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    executor: playwright-executor
+   # parallelism: 4
+    environment:
+      <<: *env
+    steps:
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+
+      - restore_cache:
+          keys:
+            - composer-cache-{{ checksum "composer.lock" }}
+            - composer-cache-
+
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run: |
+          echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io" >> $BASH_ENV
+      - run:
+          name: Install npm dependencies
+          command: cd test/playwright && npm ci
+      - run:
+          name: Install Playwright browsers
+          command: cd test/playwright && npx playwright install --with-deps
+      - run:
+          name: Waking up pantheon environment.
+          command: |
+             terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+             terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
+      - run:
+          name: Running playwright tests
+          command: |
+             cd test/playwright
+             npx playwright test
+      - store_test_results:
+          path: ./test/playwright/playwright-report
+
+      - store_artifacts:
+          path: ./test/playwright/playwright-report
+          destination: playwright-report-first
+      - store_artifacts:
+          path: /tmp/artifacts
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -399,6 +450,9 @@ workflows:
           requires:
             - static_tests
             - build
+      - playwright-test:
+          requires:
+            - deploy_to_pantheon
       - approve_deploy_to_test:
           type: approval
           requires:
