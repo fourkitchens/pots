@@ -1,5 +1,11 @@
 version: 2.1
 
+# Executors define the environment in which the jobs will run.
+executors:
+  playwright-executor:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.55.0-noble
+
 # To easily configure jobs here, parameters are set up below. Since we are
 # typically not calling this workflow via pipelines, consider changing the
 # defaults here for any permanent configuration you need to do on a project
@@ -458,13 +464,6 @@ workflows:
                 - 'main'
                 - 'master'
 
-  playwright_test:
-    when: << pipeline.parameters.run-playwright-tests >>
-    jobs:
-      - playwright-test:
-          requires:
-            - deploy_to_pantheon
-
   build-deploy-pantheon:
     when:
       and:
@@ -479,6 +478,9 @@ workflows:
           requires:
             - static_tests
             - build
+      - playwright-test:
+          requires:
+            - deploy_to_pantheon
       - approve_deploy_to_test:
           type: approval
           requires:
