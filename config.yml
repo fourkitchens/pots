@@ -12,6 +12,12 @@ parameters:
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
+  run-playwright-tests:
+    description: "Enables playwright tests"
+    type: boolean
+    default: false
+    # Enables playwright tests.
+
   php-version:
     description: major.minor version number for php version to use.
     type: string
@@ -436,6 +442,13 @@ workflows:
                 - 'main'
                 - 'master'
 
+  playwright_test:
+    when: << pipeline.parameters.run-playwright-tests >>
+    jobs:
+      - playwright-test:
+          requires:
+            - deploy_to_pantheon
+
   build-deploy-pantheon:
     when:
       and:
@@ -450,9 +463,6 @@ workflows:
           requires:
             - static_tests
             - build
-      - playwright-test:
-          requires:
-            - deploy_to_pantheon
       - approve_deploy_to_test:
           type: approval
           requires:
