@@ -17,6 +17,11 @@ parameters:
     type: boolean
     default: false
     # Enables playwright tests.
+  playwright-path:
+    description: "Path to playwright tests"
+    type: string
+    default: "test/playwright"
+    # Path where the playwright test are located.
 
   php-version:
     description: major.minor version number for php version to use.
@@ -370,6 +375,13 @@ jobs:
     environment:
       <<: *env
     steps:
+      - run:
+          name: Skip Playwright when disabled
+          command: |
+            if [ "<< pipeline.parameters.run-playwright-tests >>" != "true" ]; then
+              echo "Playwright tests disabled via run-playwright-tests."
+              circleci step halt
+            fi
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
 
@@ -387,13 +399,17 @@ jobs:
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
       - run: |
-          echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io" >> $BASH_ENV
+          if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
+            echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io" >> $BASH_ENV
+          else
+            echo "export REMOTE_ENV_BASE_URL=https://${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io" >> $BASH_ENV
+          fi
       - run:
           name: Install npm dependencies
-          command: cd test/playwright && npm ci
+          command: cd << pipeline.parameters.playwright-path >> && npm ci
       - run:
           name: Install Playwright browsers
-          command: cd test/playwright && npx playwright install --with-deps
+          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
       - run:
           name: Waking up pantheon environment.
           command: |
@@ -402,13 +418,13 @@ jobs:
       - run:
           name: Running playwright tests
           command: |
-             cd test/playwright
+             cd << pipeline.parameters.playwright-path >>
              npx playwright test
       - store_test_results:
-          path: ./test/playwright/playwright-report
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
 
       - store_artifacts:
-          path: ./test/playwright/playwright-report
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
           destination: playwright-report-first
       - store_artifacts:
           path: /tmp/artifacts
