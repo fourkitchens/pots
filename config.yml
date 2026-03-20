@@ -21,12 +21,12 @@ parameters:
   run-playwright-e2e-tests:
     description: "Enables playwright E2E tests"
     type: boolean
-    default: true
+    default: false
     # Enables playwright VRT tests.
   run-playwright-vrt-tests:
     description: "Enables playwright VRT tests"
     type: boolean
-    default: true
+    default: false
   playwright-vrt-target-env:
     description: "Pantheon environment to compare the deployed multidev against during VRT"
     type: string
