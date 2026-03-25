@@ -41,7 +41,7 @@ parameters:
     # This value must be only a major.minor version if pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
-    default: "8.2"
+    default: "8.3"
   tz:
     description: The timezone definition.
     type: string
@@ -416,6 +416,8 @@ jobs:
           else
             echo "export REMOTE_ENV_BASE_URL=https://${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
           fi
+          echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
+          echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
       - run:
           name: Install npm dependencies
           command: cd << pipeline.parameters.playwright-path >> && npm ci
@@ -435,7 +437,7 @@ jobs:
           name: Running playwright E2E tests
           command: |
              cd << pipeline.parameters.playwright-path >>
-             npx playwright test --grep-invert "@vrt"
+             npx playwright test --grep-invert "@vrt" --shard="${PLAYWRIGHT_SHARD}/${PLAYWRIGHT_TOTAL_SHARDS}"
       - store_test_results:
           path: ./<< pipeline.parameters.playwright-path >>/playwright-report
 
@@ -495,6 +497,8 @@ jobs:
             echo "export VRT_PANTHEON_SITE=${TERMINUS_SITE}" >> $BASH_ENV
             echo "export VRT_SOURCE_ENV=${TERMINUS_ENV}" >> $BASH_ENV
             echo "export VRT_TARGET_ENV=<< pipeline.parameters.playwright-vrt-target-env >>" >> $BASH_ENV
+            echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
+            echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
       - run:
           name: Running playwright VRT tests
           command: |
