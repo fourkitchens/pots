@@ -30,7 +30,7 @@ parameters:
   playwright-vrt-target-env:
     description: "Pantheon environment to compare the deployed multidev against during VRT"
     type: string
-    default: "test"
+    default: "live"
   playwright-path:
     description: "Path to playwright tests"
     type: string
