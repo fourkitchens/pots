@@ -34,6 +34,10 @@ Whatever you want it to stand for.  Here's some options:
       - [Configure More CircleCi Environment Variables](#configure-more-circleci-environment-variables-1)
 * [Configure CircleCI config.yml](#configure-circleci-configyml)
    + [Pipeline Parameter Defaults](#pipeline-parameter-defaults)
+      - [run-playwright-e2e-tests](#run-playwright-e2e-tests)
+      - [run-playwright-vrt-tests](#run-playwright-vrt-tests)
+      - [playwright-vrt-target-env](#playwright-vrt-target-env)
+      - [playwright-path](#playwright-path)
       - [php-version](#php-version)
       - [tz](#tz)
       - [host-variant](#host-variant)
@@ -44,6 +48,7 @@ Whatever you want it to stand for.  Here's some options:
       - [artifact_workspace](#artifact_workspace)
    + [Other Configuration](#other-configuration)
       - [persisting_dirs](#persisting_dirs)
+      - [Playwright Jobs](#playwright-jobs)
 * [Configurable Environment Variables](#configurable-environment-variables)
    + [Shared](#shared-1)
    + [Pantheon Specific](#pantheon-specific)
@@ -351,6 +356,63 @@ to
 ```
 
 The following parameters exist:
+#### run-playwright-e2e-tests
+This boolean controls whether the Playwright end-to-end test job runs after the
+Pantheon multidev is created.
+
+Default: `true`
+
+When enabled, the `playwright-e2e-test` job will:
+
+- restore the built project from the artifact workspace
+- install dependencies from the Playwright test directory
+- install Playwright browsers
+- wake the Pantheon environment
+- run `npx playwright test --grep-invert "@vrt"`
+
+Use this when you want standard browser coverage on the deployed multidev but
+you do not want visual regression tests mixed into that run.
+
+#### run-playwright-vrt-tests
+This boolean controls whether the Playwright visual regression test job is
+available in the Pantheon workflow.
+
+Default: `true`
+
+This job is still behind a manual CircleCI approval step named
+`approve-playwright-vrt-test`. Once approved, the job will halt immediately if
+this parameter is set to `false`.
+
+The VRT job is intended for screenshot comparison checks and runs separately
+from the standard E2E suite.
+
+#### playwright-vrt-target-env
+This string defines which Pantheon environment should be used as the visual
+baseline for VRT comparisons.
+
+Default: `"test"`
+
+During the `playwright-vrt-test` job, this value is exported as
+`VRT_TARGET_ENV`. The currently deployed multidev becomes the source
+environment, and the target environment becomes the baseline for comparison.
+
+#### playwright-path
+This string points to the directory that contains your Playwright project.
+
+Default: `"test/playwright"`
+
+This directory is expected to contain the files needed for Playwright CI runs,
+including `package.json` and your Playwright configuration. The current jobs
+use this path for:
+
+- `npm ci`
+- `npx playwright install --with-deps`
+- `npx playwright test --grep-invert "@vrt"`
+- `npm run vrt:ci`
+
+If your tests live somewhere else, update this parameter instead of changing
+each job manually.
+
 #### php-version
 This is a string that represents the version number for PHP version to use
 across the entire build.
@@ -430,6 +492,29 @@ sometimes want to include other root directories that aren't included like
 `node_modules`, `simplesaml`, or `private`. We exclude most top level
 directories because they are unneeded on the hosting system itself.
 
+#### Playwright Jobs
+The Playwright jobs are currently part of the Pantheon workflow only. Their
+purpose is to validate the freshly deployed multidev before any later manual
+deployment steps.
+
+The workflow order is:
+
+- `deploy_to_pantheon` deploys the multidev
+- `playwright-e2e-test` runs automatically after that deploy
+- `approve-playwright-vrt-test` lets a user decide whether to run VRT
+- `playwright-vrt-test` runs after approval
+
+Some practical details:
+
+- The E2E job excludes any test tagged with `@vrt`
+- The VRT job expects an `npm run vrt:ci` script in your Playwright project
+- Both jobs store the Playwright HTML report as a CircleCI artifact
+- The deploy approvals for Pantheon test and live remain separate from the
+  Playwright approval step
+
+This makes the default flow easier to manage: regular browser coverage can run
+automatically, while the slower visual comparison step stays opt-in.
+
 ## Configurable Environment Variables
 
 Environment variables can be configured using the CircleCI Environment Variables
@@ -460,6 +545,12 @@ mandatory environment variables in this way as well.
    `system.site.yml`. Ex: YES if `./config/system.site.yml` or
    `./config/default/system.site.yml` or `./config/sync/system.site.yml`
    exists. Possible values are `YES`, or `NO`.
+* `BASIC_USER`: Optional username used when the deployed Pantheon environment is
+   protected by HTTP basic authentication. If set together with `BASIC_PASS`,
+   the Playwright E2E job will use those credentials when waking the site over
+   HTTP.
+* `BASIC_PASS`: Optional password paired with `BASIC_USER` for HTTP basic
+   authentication during Playwright E2E runs.
 
 ### Pantheon Specific
 
@@ -538,6 +629,16 @@ The scripts available for overload are as follows:
    hosting environment. On Pantheon, this includes creating and building the
    multidev. On Acquia and General hosting, this just gets the Artifact code
    to the repo it should live in.
+
+For Playwright support, your project should also provide a Playwright workspace
+at the path configured by `playwright-path`. In practice that means:
+
+- a `package.json` that supports `npm ci`
+- standard E2E tests that can run with `npx playwright test --grep-invert "@vrt"`
+- a VRT script named `vrt:ci` for the visual regression job
+
+If you want a spec to run only as part of VRT, tag it with `@vrt` so it is
+excluded from the standard E2E job.
 
 ### Pantheon Specific Scripts
 

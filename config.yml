@@ -1,5 +1,11 @@
 version: 2.1
 
+# Executors define the environment in which the jobs will run.
+executors:
+  playwright-executor:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.55.0-noble
+
 # To easily configure jobs here, parameters are set up below. Since we are
 # typically not calling this workflow via pipelines, consider changing the
 # defaults here for any permanent configuration you need to do on a project
@@ -12,13 +18,30 @@ parameters:
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
+  run-playwright-e2e-tests:
+    description: "Enables playwright E2E tests"
+    type: boolean
+    default: false
+    # Enables playwright VRT tests.
+  run-playwright-vrt-tests:
+    description: "Enables playwright VRT tests"
+    type: boolean
+    default: false
+  playwright-vrt-target-env:
+    description: "Pantheon environment to compare the deployed multidev against during VRT"
+    type: string
+    default: "live"
+  playwright-path:
+    description: "Path to playwright tests"
+    type: string
+    default: "test/playwright"
   php-version:
     description: major.minor version number for php version to use.
     type: string
     # This value must be only a major.minor version if pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
-    default: "8.2"
+    default: "8.3"
   tz:
     description: The timezone definition.
     type: string
@@ -355,6 +378,140 @@ jobs:
               fi
               echo "Script done"
 
+  playwright-e2e-test:
+    <<: *defaults
+    docker:
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    executor: playwright-executor
+    parallelism: 4
+    environment:
+      <<: *env
+    steps:
+      - run:
+          name: Skip Playwright when disabled
+          command: |
+            if [ "<< pipeline.parameters.run-playwright-e2e-tests >>" != "true" ]; then
+              echo "Playwright tests disabled via run-playwright-tests."
+              circleci step halt
+            fi
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+
+      - restore_cache:
+          keys:
+            - composer-cache-{{ checksum "composer.lock" }}
+            - composer-cache-
+
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run: |
+          if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
+            echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
+          else
+            echo "export REMOTE_ENV_BASE_URL=https://${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
+          fi
+          echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
+          echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci
+      - run:
+          name: Install Playwright browsers
+          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
+      - run:
+          name: Waking up pantheon environment.
+          command: |
+             terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+             terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
+      - run:
+          name: Wake pantheon environment via HTTP
+          command: |
+            curl -fsS --retry 5 --retry-delay 5 "$REMOTE_ENV_BASE_URL" > /dev/null
+      - run:
+          name: Running playwright E2E tests
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             npx playwright test --grep-invert "@vrt" --shard="${PLAYWRIGHT_SHARD}/${PLAYWRIGHT_TOTAL_SHARDS}"
+      - store_test_results:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+          destination: playwright-report-first
+      - store_artifacts:
+          path: /tmp/artifacts
+
+
+  playwright-vrt-test:
+    <<: *defaults
+    docker:
+      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+    executor: playwright-executor
+    parallelism: 4
+    environment:
+      <<: *env
+    steps:
+      - run:
+          name: Skip Playwright when disabled
+          command: |
+            if [ "<< pipeline.parameters.run-playwright-vrt-tests >>" != "true" ]; then
+              echo "Playwright tests disabled via run-playwright-vrt-tests."
+              circleci step halt
+            fi
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+
+      - restore_cache:
+          keys:
+            - composer-cache-{{ checksum "composer.lock" }}
+            - composer-cache-
+
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci
+      - run:
+          name: Install Playwright browsers
+          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
+      - run:
+          name: Waking up source pantheon environment.
+          command: |
+             terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+             terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
+      - run:
+          name: Configure VRT source and target environments
+          command: |
+            echo "export VRT_PANTHEON_SITE=${TERMINUS_SITE}" >> $BASH_ENV
+            echo "export VRT_SOURCE_ENV=${TERMINUS_ENV}" >> $BASH_ENV
+            echo "export VRT_TARGET_ENV=<< pipeline.parameters.playwright-vrt-target-env >>" >> $BASH_ENV
+            echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
+            echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
+      - run:
+          name: Running playwright VRT tests
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             npm run vrt:ci
+      - store_test_results:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+          destination: playwright-report-first
+      - store_artifacts:
+          path: /tmp/artifacts
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -399,6 +556,16 @@ workflows:
           requires:
             - static_tests
             - build
+      - playwright-e2e-test:
+          requires:
+            - deploy_to_pantheon
+      - approve-playwright-vrt-test:
+          type: approval
+          requires:
+            - deploy_to_pantheon
+      - playwright-vrt-test:
+          requires:
+            - approve-playwright-vrt-test
       - approve_deploy_to_test:
           type: approval
           requires:
