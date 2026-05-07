@@ -34,7 +34,7 @@ parameters:
   playwright-path:
     description: "Path to playwright tests"
     type: string
-    default: "test/playwright"
+    default: "tests/playwright"
   php-version:
     description: major.minor version number for php version to use.
     type: string
@@ -508,7 +508,7 @@ jobs:
     docker:
       - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     executor: playwright-executor
-    parallelism: 4
+    parallelism: 1
     environment:
       <<: *env
     steps:
@@ -666,9 +666,11 @@ workflows:
             - static_tests
             - build
       - playwright-e2e-test:
+          filters: pipeline.parameters.run-playwright-e2e-tests == true
           requires:
             - deploy_to_pantheon
       - playwright-e2e-merge-results:
+          filters: pipeline.parameters.run-playwright-e2e-tests == true
           requires:
             - playwright-e2e-test:
               - success
@@ -676,12 +678,15 @@ workflows:
               - canceled
       - approve-playwright-vrt-test:
           type: approval
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
           requires:
             - deploy_to_pantheon
       - playwright-vrt-test:
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
           requires:
             - approve-playwright-vrt-test
       - playwright-vrt-merge-results:
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
           requires:
             - playwright-vrt-test:
               - success
