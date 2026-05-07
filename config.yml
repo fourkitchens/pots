@@ -4,7 +4,7 @@ version: 2.1
 executors:
   playwright-executor:
     docker:
-      - image: mcr.microsoft.com/playwright:v1.55.0-noble
+      - image: mcr.microsoft.com/playwright:v1.58.2-noble
 
 # To easily configure jobs here, parameters are set up below. Since we are
 # typically not calling this workflow via pipelines, consider changing the
@@ -34,14 +34,14 @@ parameters:
   playwright-path:
     description: "Path to playwright tests"
     type: string
-    default: "test/playwright"
+    default: "tests/playwright"
   php-version:
     description: major.minor version number for php version to use.
     type: string
     # This value must be only a major.minor version if pantheon is the
     # host-variant as the build-tool images do not support major.minor.patch
     # version numbers.
-    default: "8.3"
+    default: "8.4"
   tz:
     description: The timezone definition.
     type: string
@@ -298,8 +298,8 @@ jobs:
   deploy_to_pantheon:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -315,8 +315,8 @@ jobs:
   deploy_to_pantheon_to_test:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -328,8 +328,8 @@ jobs:
   deploy_to_pantheon_to_live:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -342,8 +342,8 @@ jobs:
   security_updates_check:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:8.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -381,7 +381,7 @@ jobs:
   playwright-e2e-test:
     <<: *defaults
     docker:
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     executor: playwright-executor
     parallelism: 4
     environment:
@@ -433,27 +433,82 @@ jobs:
           name: Wake pantheon environment via HTTP
           command: |
             curl -fsS --retry 5 --retry-delay 5 "$REMOTE_ENV_BASE_URL" > /dev/null
+
       - run:
           name: Running playwright E2E tests
           command: |
              cd << pipeline.parameters.playwright-path >>
+             rm -rf blob-report ci-blob-reports/e2e
+             mkdir -p ci-blob-reports/e2e
+             set +e
              npx playwright test --grep-invert "@vrt" --shard="${PLAYWRIGHT_SHARD}/${PLAYWRIGHT_TOTAL_SHARDS}"
-      - store_test_results:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-
+             test_exit_code=$?
+             set -e
+             if [ -d blob-report ]; then
+               find blob-report -maxdepth 1 -type f -name '*.zip' -exec cp {} ci-blob-reports/e2e/ \;
+             fi
+             echo "${test_exit_code}" > "ci-blob-reports/e2e/status-${CIRCLE_NODE_INDEX}.txt"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << pipeline.parameters.playwright-path >>/ci-blob-reports/e2e
       - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-          destination: playwright-report-first
+          path: ./<< pipeline.parameters.playwright-path >>/ci-blob-reports/e2e
+          destination: playwright-e2e-blob-report
       - store_artifacts:
           path: /tmp/artifacts
+      - run:
+          name: Fail E2E shard when tests failed
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             exit "$(cat "ci-blob-reports/e2e/status-${CIRCLE_NODE_INDEX}.txt")"
+
+  playwright-e2e-merge-results:
+    executor: playwright-executor
+    working_directory: ~/project
+    environment:
+      <<: *env
+    steps:
+      - run:
+          name: Skip Playwright merge when E2E tests are disabled
+          command: |
+            if [ "<< pipeline.parameters.run-playwright-e2e-tests >>" != "true" ]; then
+              echo "Playwright E2E tests disabled via run-playwright-e2e-tests."
+              circleci step halt
+            fi
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci
+      - run:
+          name: Merge E2E Playwright shard reports
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             if ! find ci-blob-reports/e2e -maxdepth 1 -type f -name '*.zip' | grep -q .; then
+               echo "No E2E Playwright blob reports found to merge."
+               exit 1
+             fi
+             rm -rf playwright-report playwright-junit
+             mkdir -p playwright-junit/e2e
+             PLAYWRIGHT_JUNIT_OUTPUT_FILE=playwright-junit/e2e/results.xml \
+               npx playwright merge-reports --reporter html,junit ./ci-blob-reports/e2e
+      - store_test_results:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/e2e
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+          destination: playwright-e2e-report
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/e2e
+          destination: playwright-e2e-junit
 
 
   playwright-vrt-test:
     <<: *defaults
     docker:
-      - image: quay.io/pantheon-public/build-tools-ci:8.x-php<< pipeline.parameters.php-version >>
+      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     executor: playwright-executor
-    parallelism: 4
+    parallelism: 1
     environment:
       <<: *env
     steps:
@@ -503,15 +558,69 @@ jobs:
           name: Running playwright VRT tests
           command: |
              cd << pipeline.parameters.playwright-path >>
+             rm -rf blob-report ci-blob-reports/vrt
+             mkdir -p ci-blob-reports/vrt
+             set +e
              npm run vrt:ci
-      - store_test_results:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-
+             test_exit_code=$?
+             set -e
+             if [ -d blob-report ]; then
+               find blob-report -maxdepth 1 -type f -name '*.zip' -exec cp {} ci-blob-reports/vrt/ \;
+             fi
+             echo "${test_exit_code}" > "ci-blob-reports/vrt/status-${CIRCLE_NODE_INDEX}.txt"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << pipeline.parameters.playwright-path >>/ci-blob-reports/vrt
       - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-          destination: playwright-report-first
+          path: ./<< pipeline.parameters.playwright-path >>/ci-blob-reports/vrt
+          destination: playwright-vrt-blob-report
       - store_artifacts:
           path: /tmp/artifacts
+      - run:
+          name: Fail VRT shard when tests failed
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             exit "$(cat "ci-blob-reports/vrt/status-${CIRCLE_NODE_INDEX}.txt")"
+
+  playwright-vrt-merge-results:
+    executor: playwright-executor
+    working_directory: ~/project
+    environment:
+      <<: *env
+    steps:
+      - run:
+          name: Skip Playwright merge when VRT tests are disabled
+          command: |
+            if [ "<< pipeline.parameters.run-playwright-vrt-tests >>" != "true" ]; then
+              echo "Playwright VRT tests disabled via run-playwright-vrt-tests."
+              circleci step halt
+            fi
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci
+      - run:
+          name: Merge VRT Playwright shard reports
+          command: |
+             cd << pipeline.parameters.playwright-path >>
+             if ! find ci-blob-reports/vrt -maxdepth 1 -type f -name '*.zip' | grep -q .; then
+               echo "No VRT Playwright blob reports found to merge."
+               exit 1
+             fi
+             rm -rf playwright-report playwright-junit
+             mkdir -p playwright-junit/vrt
+             PLAYWRIGHT_JUNIT_OUTPUT_FILE=playwright-junit/vrt/results.xml \
+               npx playwright merge-reports --reporter html,junit ./ci-blob-reports/vrt
+      - store_test_results:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/vrt
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+          destination: playwright-vrt-report
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/vrt
+          destination: playwright-vrt-junit
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -557,15 +666,32 @@ workflows:
             - static_tests
             - build
       - playwright-e2e-test:
+          filters: pipeline.parameters.run-playwright-e2e-tests == true
           requires:
             - deploy_to_pantheon
+      - playwright-e2e-merge-results:
+          filters: pipeline.parameters.run-playwright-e2e-tests == true
+          requires:
+            - playwright-e2e-test:
+              - success
+              - failed
+              - canceled
       - approve-playwright-vrt-test:
           type: approval
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
           requires:
             - deploy_to_pantheon
       - playwright-vrt-test:
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
           requires:
             - approve-playwright-vrt-test
+      - playwright-vrt-merge-results:
+          filters: pipeline.parameters.run-playwright-vrt-tests == true
+          requires:
+            - playwright-vrt-test:
+              - success
+              - failed
+              - canceled
       - approve_deploy_to_test:
           type: approval
           requires:
