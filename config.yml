@@ -418,12 +418,28 @@ jobs:
           fi
           echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
           echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
+      - restore_cache:
+          keys:
+            - playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-browsers-v1-
       - run:
           name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
+      - save_cache:
+          key: playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.npm
       - run:
           name: Install Playwright browsers
           command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
+      - save_cache:
+          key: playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.cache/ms-playwright
       - run:
           name: Waking up pantheon environment.
           command: |
@@ -478,9 +494,13 @@ jobs:
             fi
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
       - run:
           name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
       - run:
           name: Merge E2E Playwright shard reports
           command: |
@@ -535,12 +555,28 @@ jobs:
             else
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
+      - restore_cache:
+          keys:
+            - playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-browsers-v1-
       - run:
           name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
+      - save_cache:
+          key: playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.npm
       - run:
           name: Install Playwright browsers
           command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
+      - save_cache:
+          key: playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.cache/ms-playwright
       - run:
           name: Waking up source pantheon environment.
           command: |
@@ -598,9 +634,13 @@ jobs:
             fi
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
       - run:
           name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
       - run:
           name: Merge VRT Playwright shard reports
           command: |
