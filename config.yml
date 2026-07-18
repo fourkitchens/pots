@@ -4,7 +4,7 @@ version: 2.1
 executors:
   playwright-executor:
     docker:
-      - image: mcr.microsoft.com/playwright:v1.58.2-noble
+      - image: mcr.microsoft.com/playwright:v1.61.0-noble
 
 # To easily configure jobs here, parameters are set up below. Since we are
 # typically not calling this workflow via pipelines, consider changing the
@@ -36,12 +36,18 @@ parameters:
     type: string
     default: "tests/playwright"
   php-version:
-    description: major.minor version number for php version to use.
+    description: major.minor or major.minor.patch version number for php version to use.
     type: string
-    # This value must be only a major.minor version if pantheon is the
-    # host-variant as the build-tool images do not support major.minor.patch
-    # version numbers.
+    # This value must be a valid cimg/php tag, e.g. "8.4" or "8.4.2".
+    # Standard CircleCI images support both major.minor and major.minor.patch.
     default: "8.4"
+  terminus-version:
+    description: >
+      Full Terminus version to install at runtime. Pin this for reproducible
+      builds. Note the Build Tools plugin formally targets Terminus ^3, though it
+      currently also works under 4.x.
+    type: string
+    default: "4.3.2"
   tz:
     description: The timezone definition.
     type: string
@@ -298,8 +304,7 @@ jobs:
   deploy_to_pantheon:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
+      - image: cimg/php:<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -308,6 +313,11 @@ jobs:
     steps:
       - restore-project:
           workspace_root: << pipeline.parameters.artifact_workspace >>
+      - install-terminus
+      # The Terminus Secrets plugin shells out to rsync to upload the secrets
+      # file to the environment's files/ directory. cimg/php does not ship rsync
+      # (the old build-tools-ci image did), so install it before deploying.
+      - install-rsync
       # This says "dev" but it also handles Multidev instances too.
       - deploy-to-pantheon-env:
           environment: 'dev'
@@ -315,26 +325,28 @@ jobs:
   deploy_to_pantheon_to_test:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
+      - image: cimg/php:<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
     steps:
+      - install-terminus:
+          install-build-tools: false
       - deploy-to-pantheon-env:
           environment: 'test'
 
   deploy_to_pantheon_to_live:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
+      - image: cimg/php:<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
     steps:
+      - install-terminus:
+          install-build-tools: false
       - deploy-to-pantheon-env:
           environment: 'live'
 
@@ -342,8 +354,7 @@ jobs:
   security_updates_check:
     <<: *defaults
     docker:
-      # quay.io/pantheon-public/build-tools-ci:9.x-php${PHPVERSION}
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
+      - image: cimg/php:<< pipeline.parameters.php-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -353,8 +364,10 @@ jobs:
           name: Upgrade composer
           command: composer self-update
       - checkout
-      - php/install-composer
-      - php/install-packages
+      - php/install_composer
+      - php/install_packages
+      - install-terminus:
+          install-build-tools: false
       - run:
           name: setup-environment-vars
           command: |
@@ -380,104 +393,27 @@ jobs:
 
   playwright-e2e-test:
     <<: *defaults
-    docker:
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     executor: playwright-executor
     parallelism: 4
     environment:
       <<: *env
     steps:
+      - playwright-skip-when-disabled:
+          flag: << pipeline.parameters.run-playwright-e2e-tests >>
+      - playwright-prepare
       - run:
-          name: Skip Playwright when disabled
+          name: Configure E2E base URL
           command: |
-            if [ "<< pipeline.parameters.run-playwright-e2e-tests >>" != "true" ]; then
-              echo "Playwright tests disabled via run-playwright-tests."
-              circleci step halt
-            fi
-      - restore-project:
-          workspace_root: << pipeline.parameters.artifact_workspace >>
-
-      - restore_cache:
-          keys:
-            - composer-cache-{{ checksum "composer.lock" }}
-            - composer-cache-
-
-      - run:
-          name: setup-environment-vars
-          command: |
-            if [ -f "./.circleci/scripts/set-environment" ]; then
-              ./.circleci/scripts/set-environment
+            if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
+              echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
             else
-              ./vendor/fourkitchens/pots/scripts/set-environment
+              echo "export REMOTE_ENV_BASE_URL=https://${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
             fi
-      - run: |
-          if [ -n "$BASIC_USER" ] && [ -n "$BASIC_PASS" ]; then
-            echo "export REMOTE_ENV_BASE_URL=https://${BASIC_USER}:${BASIC_PASS}@${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
-          else
-            echo "export REMOTE_ENV_BASE_URL=https://${TERMINUS_ENV}-${TERMINUS_SITE}.pantheonsite.io/" >> $BASH_ENV
-          fi
-          echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
-          echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
-      - restore_cache:
-          keys:
-            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-npm-v1-
-      - restore_cache:
-          keys:
-            - playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-browsers-v1-
-      - run:
-          name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
-      - save_cache:
-          key: playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-          paths:
-            - ~/.npm
-      - run:
-          name: Install Playwright browsers
-          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
-      - save_cache:
-          key: playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-          paths:
-            - ~/.cache/ms-playwright
-      - run:
-          name: Waking up pantheon environment.
-          command: |
-             terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
-             terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
-      - run:
-          name: Wake pantheon environment via HTTP
-          command: |
-            curl -fsS --retry 5 --retry-delay 5 "$REMOTE_ENV_BASE_URL" > /dev/null
-
-      - run:
-          name: Running playwright E2E tests
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             rm -rf blob-report ci-blob-reports/e2e
-             mkdir -p ci-blob-reports/e2e
-             set +e
-             npx playwright test --grep-invert "@vrt" --shard="${PLAYWRIGHT_SHARD}/${PLAYWRIGHT_TOTAL_SHARDS}"
-             test_exit_code=$?
-             set -e
-             if [ -d blob-report ]; then
-               find blob-report -maxdepth 1 -type f -name '*.zip' -exec cp {} ci-blob-reports/e2e/ \;
-             fi
-             echo "${test_exit_code}" > "ci-blob-reports/e2e/status-${CIRCLE_NODE_INDEX}.txt"
-      - persist_to_workspace:
-          root: .
-          paths:
-            - << pipeline.parameters.playwright-path >>/ci-blob-reports/e2e
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/ci-blob-reports/e2e
-          destination: playwright-e2e-blob-report
-      - store_artifacts:
-          path: /tmp/artifacts
-      - run:
-          name: Fail E2E shard when tests failed
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             exit "$(cat "ci-blob-reports/e2e/status-${CIRCLE_NODE_INDEX}.txt")"
+      - playwright-wake:
+          http-wake: true
+      - playwright-run:
+          report-dir: e2e
+          test-command: 'npx playwright test --grep-invert "@vrt" --shard="${PLAYWRIGHT_SHARD}/${PLAYWRIGHT_TOTAL_SHARDS}"'
 
   playwright-e2e-merge-results:
     executor: playwright-executor
@@ -485,139 +421,31 @@ jobs:
     environment:
       <<: *env
     steps:
-      - run:
-          name: Skip Playwright merge when E2E tests are disabled
-          command: |
-            if [ "<< pipeline.parameters.run-playwright-e2e-tests >>" != "true" ]; then
-              echo "Playwright E2E tests disabled via run-playwright-e2e-tests."
-              circleci step halt
-            fi
-      - restore-project:
-          workspace_root: << pipeline.parameters.artifact_workspace >>
-      - restore_cache:
-          keys:
-            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-npm-v1-
-      - run:
-          name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
-      - run:
-          name: Merge E2E Playwright shard reports
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             if ! find ci-blob-reports/e2e -maxdepth 1 -type f -name '*.zip' | grep -q .; then
-               echo "No E2E Playwright blob reports found to merge."
-               exit 1
-             fi
-             rm -rf playwright-report playwright-junit
-             mkdir -p playwright-junit/e2e
-             PLAYWRIGHT_JUNIT_OUTPUT_FILE=playwright-junit/e2e/results.xml \
-               npx playwright merge-reports --reporter html,junit ./ci-blob-reports/e2e
-      - store_test_results:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/e2e
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-          destination: playwright-e2e-report
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/e2e
-          destination: playwright-e2e-junit
-
+      - playwright-skip-when-disabled:
+          flag: << pipeline.parameters.run-playwright-e2e-tests >>
+      - playwright-merge:
+          report-dir: e2e
 
   playwright-vrt-test:
     <<: *defaults
-    docker:
-      - image: quay.io/pantheon-public/build-tools-ci:9.x-php<< pipeline.parameters.php-version >>
     executor: playwright-executor
-    parallelism: 1
+    parallelism: 4
     environment:
       <<: *env
     steps:
-      - run:
-          name: Skip Playwright when disabled
-          command: |
-            if [ "<< pipeline.parameters.run-playwright-vrt-tests >>" != "true" ]; then
-              echo "Playwright tests disabled via run-playwright-vrt-tests."
-              circleci step halt
-            fi
-      - restore-project:
-          workspace_root: << pipeline.parameters.artifact_workspace >>
-
-      - restore_cache:
-          keys:
-            - composer-cache-{{ checksum "composer.lock" }}
-            - composer-cache-
-
-      - run:
-          name: setup-environment-vars
-          command: |
-            if [ -f "./.circleci/scripts/set-environment" ]; then
-              ./.circleci/scripts/set-environment
-            else
-              ./vendor/fourkitchens/pots/scripts/set-environment
-            fi
-      - restore_cache:
-          keys:
-            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-npm-v1-
-      - restore_cache:
-          keys:
-            - playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-browsers-v1-
-      - run:
-          name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
-      - save_cache:
-          key: playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-          paths:
-            - ~/.npm
-      - run:
-          name: Install Playwright browsers
-          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
-      - save_cache:
-          key: playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-          paths:
-            - ~/.cache/ms-playwright
-      - run:
-          name: Waking up source pantheon environment.
-          command: |
-             terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
-             terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
+      - playwright-skip-when-disabled:
+          flag: << pipeline.parameters.run-playwright-vrt-tests >>
+      - playwright-prepare
+      - playwright-wake
       - run:
           name: Configure VRT source and target environments
           command: |
             echo "export VRT_PANTHEON_SITE=${TERMINUS_SITE}" >> $BASH_ENV
             echo "export VRT_SOURCE_ENV=${TERMINUS_ENV}" >> $BASH_ENV
             echo "export VRT_TARGET_ENV=<< pipeline.parameters.playwright-vrt-target-env >>" >> $BASH_ENV
-            echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
-            echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
-      - run:
-          name: Running playwright VRT tests
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             rm -rf blob-report ci-blob-reports/vrt
-             mkdir -p ci-blob-reports/vrt
-             set +e
-             npm run vrt:ci
-             test_exit_code=$?
-             set -e
-             if [ -d blob-report ]; then
-               find blob-report -maxdepth 1 -type f -name '*.zip' -exec cp {} ci-blob-reports/vrt/ \;
-             fi
-             echo "${test_exit_code}" > "ci-blob-reports/vrt/status-${CIRCLE_NODE_INDEX}.txt"
-      - persist_to_workspace:
-          root: .
-          paths:
-            - << pipeline.parameters.playwright-path >>/ci-blob-reports/vrt
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/ci-blob-reports/vrt
-          destination: playwright-vrt-blob-report
-      - store_artifacts:
-          path: /tmp/artifacts
-      - run:
-          name: Fail VRT shard when tests failed
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             exit "$(cat "ci-blob-reports/vrt/status-${CIRCLE_NODE_INDEX}.txt")"
+      - playwright-run:
+          report-dir: vrt
+          test-command: npm run vrt:ci
 
   playwright-vrt-merge-results:
     executor: playwright-executor
@@ -625,42 +453,10 @@ jobs:
     environment:
       <<: *env
     steps:
-      - run:
-          name: Skip Playwright merge when VRT tests are disabled
-          command: |
-            if [ "<< pipeline.parameters.run-playwright-vrt-tests >>" != "true" ]; then
-              echo "Playwright VRT tests disabled via run-playwright-vrt-tests."
-              circleci step halt
-            fi
-      - restore-project:
-          workspace_root: << pipeline.parameters.artifact_workspace >>
-      - restore_cache:
-          keys:
-            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
-            - playwright-npm-v1-
-      - run:
-          name: Install npm dependencies
-          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
-      - run:
-          name: Merge VRT Playwright shard reports
-          command: |
-             cd << pipeline.parameters.playwright-path >>
-             if ! find ci-blob-reports/vrt -maxdepth 1 -type f -name '*.zip' | grep -q .; then
-               echo "No VRT Playwright blob reports found to merge."
-               exit 1
-             fi
-             rm -rf playwright-report playwright-junit
-             mkdir -p playwright-junit/vrt
-             PLAYWRIGHT_JUNIT_OUTPUT_FILE=playwright-junit/vrt/results.xml \
-               npx playwright merge-reports --reporter html,junit ./ci-blob-reports/vrt
-      - store_test_results:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/vrt
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
-          destination: playwright-vrt-report
-      - store_artifacts:
-          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/vrt
-          destination: playwright-vrt-junit
+      - playwright-skip-when-disabled:
+          flag: << pipeline.parameters.run-playwright-vrt-tests >>
+      - playwright-merge:
+          report-dir: vrt
   # Run this on one of the main branches to push a release back to github.
   #
   # This usually will do things like create a change log and bump the version
@@ -808,11 +604,6 @@ node-install-parameters: &node-install-parameters
       default: false
       description: Install Yarn?
       type: boolean
-  node-install-dir:
-      default: /usr/local
-      description: |
-          Where should Node.js be installed?
-      type: string
   node-version:
       default: ""
       description: |
@@ -889,9 +680,62 @@ node-install-packages-parameters: &node-install-packages-parameters
     description: Cache your node packages automatically for faster install times.
     type: boolean
 orbs:
-  node: circleci/node@5.1.0
-  php: circleci/php@1.1.0
+  node: circleci/node@7.2.1
+  php: circleci/php@3.0.0
 commands:
+  install-terminus:
+    description: >
+      Install Pantheon Terminus at runtime, and optionally the Build Tools and
+      Secrets plugins. Replaces the deprecated quay.io/pantheon-public/build-tools-ci
+      image, which used to ship these pre-installed.
+    parameters:
+      install-build-tools:
+        description: >
+          Install the Terminus Build Tools and Secrets plugins. Only the
+          dev/multidev deploy uses build:* and secrets:* commands; leave this
+          false for jobs that only need core Terminus (env:deploy, env:wake,
+          backup:create, etc.) to save time.
+        type: boolean
+        default: true
+    steps:
+      - restore_cache:
+          keys:
+            - terminus-<< pipeline.parameters.terminus-version >>-{{ .Branch }}
+            - terminus-<< pipeline.parameters.terminus-version >>-
+      - run:
+          name: Install Terminus
+          command: |
+            if [ ! -f ~/terminus/terminus ]; then
+              mkdir -p ~/terminus
+              cd ~/terminus
+              curl -L "https://github.com/pantheon-systems/terminus/releases/download/<< pipeline.parameters.terminus-version >>/terminus.phar" -o terminus
+              chmod +x terminus
+            fi
+            # Use sudo only when not already root. cimg/php runs as the non-root
+            # "circleci" user (with passwordless sudo), while the Playwright image
+            # runs as root and does not ship sudo.
+            SUDO=""
+            if [ "$(id -u)" -ne 0 ]; then
+              SUDO="sudo"
+            fi
+            $SUDO ln -sf ~/terminus/terminus /usr/local/bin/terminus
+            terminus --version
+      - when:
+          condition: << parameters.install-build-tools >>
+          steps:
+            - run:
+                name: Install Terminus Build Tools plugin
+                command: |
+                  terminus self:plugin:install --yes pantheon-systems/terminus-build-tools-plugin
+            - run:
+                name: Install Terminus Secrets plugin
+                command: |
+                  terminus self:plugin:install --yes pantheon-systems/terminus-secrets-plugin
+      - save_cache:
+          key: terminus-<< pipeline.parameters.terminus-version >>-{{ .Branch }}
+          paths:
+            - ~/terminus
+            - ~/.terminus
   install-project-dependency-managers:
     description: setup composer and npm.
     parameters:
@@ -899,7 +743,7 @@ commands:
     steps:
       # Most projects require both composer and npm to be installed to do
       # anything.
-      - php/install-composer
+      - php/install_composer
       - run:
           name: Set up Github Token
           command: |
@@ -925,7 +769,6 @@ commands:
             fi
       - node/install:
           install-yarn: << parameters.install-yarn >>
-          node-install-dir: << parameters.node-install-dir >>
           node-version: << parameters.node-version >>
           yarn-version: << parameters.yarn-version >>
       - save_cache:
@@ -938,7 +781,7 @@ commands:
     parameters:
       <<: *node-install-packages-parameters
     steps:
-      - php/install-packages
+      - php/install_packages
       - node/install-packages:
           app-dir: << parameters.node-app-dir >>
           cache-only-lockfile: << parameters.node-cache-only-lockfile >>
@@ -970,7 +813,6 @@ commands:
       - install-rsync
       - install-project-dependency-managers:
           install-yarn: << parameters.install-yarn >>
-          node-install-dir: << parameters.node-install-dir >>
           node-version: << parameters.node-version >>
           yarn-version: << parameters.yarn-version >>
       - install-project-dependencies:
@@ -1060,5 +902,184 @@ commands:
           key: terminus-cache-v1-{{ checksum "terminus-cache-key.txt" }}
           paths:
             - ~/.terminus
+  playwright-skip-when-disabled:
+    description: >
+      Halt the current job early when the given feature flag is not "true".
+      Pass the relevant pipeline parameter as `flag`.
+    parameters:
+      flag:
+        description: "Value of the pipeline parameter that gates this suite."
+        type: boolean
+    steps:
+      - run:
+          name: Skip Playwright when disabled
+          command: |
+            if [ "<< parameters.flag >>" != "true" ]; then
+              echo "Playwright suite disabled; halting."
+              circleci step halt
+            fi
+  playwright-prepare:
+    description: >
+      Restore the built project, set environment variables, install Terminus, and
+      install Playwright npm dependencies and browsers (all cached). Shared setup
+      for the Playwright test jobs.
+    steps:
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+      - restore_cache:
+          keys:
+            - composer-cache-{{ checksum "composer.lock" }}
+            - composer-cache-
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run:
+          name: Install PHP (required by Terminus)
+          command: |
+            # The Playwright image ships Node but not PHP, and Terminus is a PHP
+            # phar. Install a PHP CLI runtime (with the extensions Terminus needs)
+            # so terminus commands work here, e.g. `terminus drush ... -- uli`.
+            if ! command -v php >/dev/null 2>&1; then
+              SUDO=""
+              if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
+              $SUDO apt-get update -y
+              $SUDO apt-get install -y --no-install-recommends php-cli php-curl php-mbstring php-xml
+            fi
+            php --version
+      - install-terminus:
+          install-build-tools: false
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
+      - restore_cache:
+          keys:
+            - playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-browsers-v1-
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
+      - save_cache:
+          key: playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.npm
+      - run:
+          name: Install Playwright browsers
+          command: cd << pipeline.parameters.playwright-path >> && npx playwright install --with-deps
+      - save_cache:
+          key: playwright-browsers-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+          paths:
+            - ~/.cache/ms-playwright
+  playwright-wake:
+    description: >
+      Authenticate Terminus and wake the target Pantheon environment. Optionally
+      also warm it with an HTTP request to REMOTE_ENV_BASE_URL.
+    parameters:
+      http-wake:
+        description: "Additionally warm the environment over HTTP (requires REMOTE_ENV_BASE_URL)."
+        type: boolean
+        default: false
+    steps:
+      - run:
+          name: Wake Pantheon environment via Terminus
+          command: |
+            terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+            terminus -n env:wake $TERMINUS_SITE.$TERMINUS_ENV
+      - when:
+          condition: << parameters.http-wake >>
+          steps:
+            - run:
+                name: Wake Pantheon environment via HTTP
+                command: |
+                  curl -fsS --retry 5 --retry-delay 5 "$REMOTE_ENV_BASE_URL" > /dev/null
+  playwright-run:
+    description: >
+      Run a sharded Playwright suite, capture its blob reports into
+      ci-blob-reports/<report-dir>, persist them for the merge job, and fail the
+      shard if the suite failed.
+    parameters:
+      report-dir:
+        description: "Subdirectory under ci-blob-reports for this suite's reports (e.g. e2e, vrt)."
+        type: string
+      test-command:
+        description: "Command that runs the suite, executed from the Playwright path."
+        type: string
+    steps:
+      - run:
+          name: Configure Playwright shards
+          command: |
+            echo "export PLAYWRIGHT_SHARD=$((${CIRCLE_NODE_INDEX}+1))" >> $BASH_ENV
+            echo "export PLAYWRIGHT_TOTAL_SHARDS=${CIRCLE_NODE_TOTAL}" >> $BASH_ENV
+      - run:
+          name: Running Playwright << parameters.report-dir >> tests
+          command: |
+            cd << pipeline.parameters.playwright-path >>
+            rm -rf blob-report ci-blob-reports/<< parameters.report-dir >>
+            mkdir -p ci-blob-reports/<< parameters.report-dir >>
+            set +e
+            << parameters.test-command >>
+            test_exit_code=$?
+            set -e
+            if [ -d blob-report ]; then
+              find blob-report -maxdepth 1 -type f -name '*.zip' -exec cp {} ci-blob-reports/<< parameters.report-dir >>/ \;
+            fi
+            echo "${test_exit_code}" > "ci-blob-reports/<< parameters.report-dir >>/status-${CIRCLE_NODE_INDEX}.txt"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << pipeline.parameters.playwright-path >>/ci-blob-reports/<< parameters.report-dir >>
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/ci-blob-reports/<< parameters.report-dir >>
+          destination: playwright-<< parameters.report-dir >>-blob-report
+      - store_artifacts:
+          path: /tmp/artifacts
+      - run:
+          name: Fail << parameters.report-dir >> shard when tests failed
+          command: |
+            cd << pipeline.parameters.playwright-path >>
+            exit "$(cat "ci-blob-reports/<< parameters.report-dir >>/status-${CIRCLE_NODE_INDEX}.txt")"
+  playwright-merge:
+    description: >
+      Merge the sharded Playwright blob reports for a suite into a combined HTML +
+      JUnit report and store them as artifacts / test results.
+    parameters:
+      report-dir:
+        description: "Subdirectory under ci-blob-reports holding the sharded reports (e.g. e2e, vrt)."
+        type: string
+    steps:
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+      - restore_cache:
+          keys:
+            - playwright-npm-v1-{{ checksum "<< pipeline.parameters.playwright-path >>/package-lock.json" }}
+            - playwright-npm-v1-
+      - run:
+          name: Install npm dependencies
+          command: cd << pipeline.parameters.playwright-path >> && npm ci --prefer-offline
+      - run:
+          name: Merge << parameters.report-dir >> Playwright shard reports
+          command: |
+            cd << pipeline.parameters.playwright-path >>
+            if ! find ci-blob-reports/<< parameters.report-dir >> -maxdepth 1 -type f -name '*.zip' | grep -q .; then
+              echo "No << parameters.report-dir >> Playwright blob reports found to merge."
+              exit 1
+            fi
+            rm -rf playwright-report playwright-junit
+            mkdir -p playwright-junit/<< parameters.report-dir >>
+            PLAYWRIGHT_JUNIT_OUTPUT_FILE=playwright-junit/<< parameters.report-dir >>/results.xml \
+              npx playwright merge-reports --reporter html,junit ./ci-blob-reports/<< parameters.report-dir >>
+      - store_test_results:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/<< parameters.report-dir >>
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-report
+          destination: playwright-<< parameters.report-dir >>-report
+      - store_artifacts:
+          path: ./<< pipeline.parameters.playwright-path >>/playwright-junit/<< parameters.report-dir >>
+          destination: playwright-<< parameters.report-dir >>-junit
 
 ##### Feel free to alter the tasks below to point to your own tasks.

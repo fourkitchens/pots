@@ -75,6 +75,17 @@ diff -u --color .circleci/config.yml ./vendor/fourkitchens/pots/config.yml
 
 Validate the changes and move over the ones you want to keep.
 
+### Migrating off the `build-tools-ci` image
+
+Pantheon deprecated the `quay.io/pantheon-public/build-tools-ci` Docker image family
+in June 2026. If your `.circleci/config.yml` still pins that image on any Pantheon job
+(`deploy_to_pantheon*`, `security_updates_check`) or the Playwright jobs, replace those
+`docker.image` entries with `cimg/php:<< pipeline.parameters.php-version >>` (Playwright
+jobs use the `playwright-executor`) and add the `install-terminus` step to each job that
+uses Terminus, exactly as shipped in the current `config.yml`. Terminus is now installed
+at runtime and pinned via the new `terminus-version` and `terminus-build-tools-version`
+parameters — set those if you need versions other than the defaults.
+
 ## Dependencies
 
 This package expects your project to have the following support scaffolding to
@@ -417,13 +428,20 @@ each job manually.
 This is a string that represents the version number for PHP version to use
 across the entire build.
 
-If you are using Pantheon as a host-variant, this can only be a major.minor
-version number such as `"8.1"` because Pantheon Docker containers only allow
-the two digit version.
+This value must be a valid `cimg/php` tag. Both major.minor (e.g. `"8.4"`)
+and major.minor.patch (e.g. `"8.4.2"`) are supported.
 
-On other hosting platforms, you can use a three digit version number
-(major.minor.patch), such as `"8.1.4"` if required, however 2 digits are
-allowed.
+#### terminus-version
+This is a string controlling the [Terminus](https://github.com/pantheon-systems/terminus)
+version installed at runtime by the `install-terminus` command. Because Pantheon jobs
+now run on a standard image instead of the deprecated `build-tools-ci` container,
+Terminus is installed during the build rather than baked into the image.
+
+Provide a full Terminus version to pin (e.g. `"4.3.2"`, the default). Pinning keeps
+builds reproducible and prevents a bad upstream release from breaking every project at
+once. The Build Tools and Secrets plugins are installed at their latest versions
+compatible with the installed Terminus, so there is no separate version parameter for
+them.
 
 #### tz
 This is a string that represents the timezone. This may be important so that
@@ -446,6 +464,14 @@ an Artifact Build using Pantheon's [Terminus](https://github.com/pantheon-system
 with the aid of the [Build Tools](https://github.com/pantheon-systems/terminus-build-tools-plugin)
 plugin. These changes are committed only to the Pantheon git repository and not
 to your "Source Repository", the one you create coding changes in.
+
+Pantheon jobs run on the standard `cimg/php` image and install Terminus (and, for the
+dev/multidev deploy, the Build Tools plugin) at runtime via the `install-terminus`
+command. This replaces the deprecated `quay.io/pantheon-public/build-tools-ci`
+container, which [Pantheon stopped maintaining in June 2026](https://docs.pantheon.io/release-notes/2026/06/build-tools-ci-deprecated).
+The Build Tools plugin itself is not deprecated and is still used. The Terminus version
+is controlled by the `terminus-version` parameter described above; its plugins install
+at their latest compatible versions.
 
 ##### acquia
 Acquia provides you a very minimal workflow, however, it does provide
