@@ -35,7 +35,7 @@ Whatever you want it to stand for.  Here's some options:
 * [Configure CircleCI config.yml](#configure-circleci-configyml)
    + [Pipeline Parameter Defaults](#pipeline-parameter-defaults)
       - [run-playwright-e2e-tests](#run-playwright-e2e-tests)
-      - [run-playwright-vrt-tests](#run-playwright-vrt-tests)
+      - [Visual regression tests (label-triggered)](#visual-regression-tests-label-triggered)
       - [playwright-vrt-target-env](#playwright-vrt-target-env)
       - [playwright-path](#playwright-path)
       - [php-version](#php-version)
@@ -384,24 +384,19 @@ When enabled, the `playwright-e2e-test` job will:
 Use this when you want standard browser coverage on the deployed multidev but
 you do not want visual regression tests mixed into that run.
 
-#### run-playwright-vrt-tests
-This boolean controls whether the Playwright visual regression test job is
-available in the Pantheon workflow.
+#### Visual regression tests (label-triggered)
 
-Default: `true`
-
-This job is still behind a manual CircleCI approval step named
-`approve-playwright-vrt-test`. Once approved, the job will halt immediately if
-this parameter is set to `false`.
-
-The VRT job is intended for screenshot comparison checks and runs separately
-from the standard E2E suite.
+VRT is no longer controlled by a parameter or a manual approval. It runs when a
+pull request is labeled — **`run vrt tests`** (VRT only) or **`run vrt tests with
+fresh db`** (refresh DB + files from live, then VRT). See
+[Visual regression testing](#visual-regression-testing) below for the trigger
+prerequisites and behavior.
 
 #### playwright-vrt-target-env
 This string defines which Pantheon environment should be used as the visual
 baseline for VRT comparisons.
 
-Default: `"test"`
+Default: `"live"`
 
 During the `playwright-vrt-test` job, this value is exported as
 `VRT_TARGET_ENV`. The currently deployed multidev becomes the source
@@ -526,17 +521,62 @@ deployment steps.
 The workflow order is:
 
 - `deploy_to_pantheon` deploys the multidev
-- `playwright-e2e-test` runs automatically after that deploy
-- `approve-playwright-vrt-test` lets a user decide whether to run VRT
-- `playwright-vrt-test` runs after approval
+- `playwright-e2e-test` runs automatically after that deploy (when
+  `run-playwright-e2e-tests` is enabled)
+
+VRT runs in a separate, label-triggered workflow (see below), not inside
+`build-deploy-pantheon`.
 
 Some practical details:
 
 - The E2E job excludes any test tagged with `@vrt`
 - The VRT job expects an `npm run vrt:ci` script in your Playwright project
 - Both jobs store the Playwright HTML report as a CircleCI artifact
-- The deploy approvals for Pantheon test and live remain separate from the
-  Playwright approval step
+
+### Visual regression testing
+
+VRT is triggered on demand by labeling a pull request. There are two labels:
+
+- **`run vrt tests`** → the `vrt-on-label` workflow runs VRT against the PR's
+  already-deployed multidev (the one `build-deploy-pantheon` created on push). It
+  does not redeploy; the `build` job only produces the workspace and dependencies
+  the VRT jobs need.
+- **`run vrt tests with fresh db`** → the `vrt-on-label-fresh-db` workflow first
+  runs `vrt_sync_from_live`, which clones the **database and files** from the
+  canonical/live environment into the multidev and runs the deploy commands
+  (`drush-commands`, including `deploy:hook`), then runs VRT. Use this when the
+  visual diff should reflect the branch's code applied on top of live content.
+  (The sync refuses to run against `dev`/`test`/`live` as a safety guard.)
+
+Under the hood, each VRT workflow is gated on the `vrt-mode` pipeline parameter
+(`plain` / `fresh-db`); a normal push/PR pipeline leaves it at the default `none`
+and runs the usual `build-deploy-pantheon` workflow only. CircleCI's native label
+triggers can't match arbitrary label names, so the labels are wired up through a
+small GitHub Actions workflow that calls the CircleCI API.
+
+**Prerequisite — one-time project setup:**
+
+1. **Copy the trigger workflow** `templates/github-workflows/vrt-label-trigger.yml`
+   from this package into your repository's `.github/workflows/` directory.
+2. **Add a CircleCI API token** as the repository Actions secret **`CIRCLECI_TOKEN`**
+   (a machine/bot user's personal API token is recommended). The Action uses it to
+   trigger the pipeline via `POST /api/v2/project/gh/<org>/<repo>/pipeline`.
+3. **Create the two labels** on the repo: `run vrt tests` and
+   `run vrt tests with fresh db`.
+
+When you label a PR, the Action maps the label to `vrt-mode` (`plain` or
+`fresh-db`) and starts a CircleCI pipeline on the PR's head branch. Only the
+matching VRT workflow runs — it does not start another `build-deploy-pantheon`.
+(Fork PRs are not supported: GitHub withholds secrets from forked-PR Action runs
+and the head branch isn't in the base repo.)
+
+To run VRT: push your branch (the normal pipeline builds and deploys the
+`pr-<n>` multidev), then add either label to the PR. Remove and re-add the label
+to run it again. Use `playwright-vrt-target-env` to choose the baseline
+environment for the comparison.
+
+> Note: `drush deploy:hook` now runs as part of the standard deploy commands
+> (`scripts/pantheon/drush-commands`) on every Pantheon deploy, not just VRT.
 
 This makes the default flow easier to manage: regular browser coverage can run
 automatically, while the slower visual comparison step stays opt-in.

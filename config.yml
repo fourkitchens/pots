@@ -22,15 +22,17 @@ parameters:
     description: "Enables playwright E2E tests"
     type: boolean
     default: false
-    # Enables playwright VRT tests.
-  run-playwright-vrt-tests:
-    description: "Enables playwright VRT tests"
-    type: boolean
-    default: false
   playwright-vrt-target-env:
     description: "Pantheon environment to compare the deployed multidev against during VRT"
     type: string
     default: "live"
+  vrt-mode:
+    description: >
+      Which VRT flow to run. Set by the GitHub Actions label trigger via the CircleCI
+      API. "none" = normal build/deploy pipeline; "plain" = VRT only; "fresh-db" =
+      refresh DB+files from live then VRT.
+    type: string
+    default: "none"
   playwright-path:
     description: "Path to playwright tests"
     type: string
@@ -426,6 +428,40 @@ jobs:
       - playwright-merge:
           report-dir: e2e
 
+  # Refreshes a PR multidev with DB + files from the canonical (live) env and
+  # runs the deploy commands, so VRT can run against branch code on live content.
+  # Used by the vrt-on-label-fresh-db workflow.
+  vrt_sync_from_live:
+    <<: *defaults
+    docker:
+      - image: cimg/php:<< pipeline.parameters.php-version >>
+    environment:
+      <<: *env
+      TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
+      TERM: dumb
+    steps:
+      - restore-project:
+          workspace_root: << pipeline.parameters.artifact_workspace >>
+      - install-terminus
+      - install-rsync
+      - run:
+          name: setup-environment-vars
+          command: |
+            if [ -f "./.circleci/scripts/set-environment" ]; then
+              ./.circleci/scripts/set-environment
+            else
+              ./vendor/fourkitchens/pots/scripts/set-environment
+            fi
+      - run:
+          name: Sync DB + files from live and run deploy commands
+          no_output_timeout: 30m
+          command: |
+            if [ -f "./.circleci/scripts/sync-from-live" ]; then
+              ./.circleci/scripts/sync-from-live
+            else
+              ./vendor/fourkitchens/pots/scripts/pantheon/sync-from-live
+            fi
+
   playwright-vrt-test:
     <<: *defaults
     executor: playwright-executor
@@ -433,8 +469,6 @@ jobs:
     environment:
       <<: *env
     steps:
-      - playwright-skip-when-disabled:
-          flag: << pipeline.parameters.run-playwright-vrt-tests >>
       - playwright-prepare
       - playwright-wake
       - run:
@@ -453,8 +487,6 @@ jobs:
     environment:
       <<: *env
     steps:
-      - playwright-skip-when-disabled:
-          flag: << pipeline.parameters.run-playwright-vrt-tests >>
       - playwright-merge:
           report-dir: vrt
   # Run this on one of the main branches to push a release back to github.
@@ -492,6 +524,10 @@ workflows:
       and:
       - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
       - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
+      # Don't run the full build/deploy for VRT-only pipelines (triggered via the
+      # GitHub Actions label workflow, which sets vrt-mode). Normal push/PR
+      # pipelines use the default "none" and run as usual.
+      - equal: [ "none", << pipeline.parameters.vrt-mode >> ]
     jobs:
       - static_tests
       - build
@@ -509,22 +545,6 @@ workflows:
           filters: pipeline.parameters.run-playwright-e2e-tests == true
           requires:
             - playwright-e2e-test:
-              - success
-              - failed
-              - canceled
-      - approve-playwright-vrt-test:
-          type: approval
-          filters: pipeline.parameters.run-playwright-vrt-tests == true
-          requires:
-            - deploy_to_pantheon
-      - playwright-vrt-test:
-          filters: pipeline.parameters.run-playwright-vrt-tests == true
-          requires:
-            - approve-playwright-vrt-test
-      - playwright-vrt-merge-results:
-          filters: pipeline.parameters.run-playwright-vrt-tests == true
-          requires:
-            - playwright-vrt-test:
               - success
               - failed
               - canceled
@@ -571,6 +591,54 @@ workflows:
               only:
                 - 'main'
                 - 'master'
+
+  # Runs the Playwright VRT suite on demand. Triggered by the GitHub Actions
+  # workflow (templates/github-workflows/vrt-label-trigger.yml): labeling a PR
+  # "run vrt tests" makes it call the CircleCI API with vrt-mode=plain. It tests
+  # the PR's already-deployed multidev (created by build-deploy-pantheon on push);
+  # it does not redeploy. The `build` job only provides the workspace/deps the VRT
+  # jobs expect.
+  vrt-on-label:
+    when:
+      and:
+        - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+        - equal: [ "plain", << pipeline.parameters.vrt-mode >> ]
+    jobs:
+      - build
+      - playwright-vrt-test:
+          requires:
+            - build
+      - playwright-vrt-merge-results:
+          requires:
+            - playwright-vrt-test:
+              - success
+              - failed
+              - canceled
+
+  # Same as vrt-on-label, but first refreshes the multidev's DB + files from live
+  # and runs the deploy commands (see vrt_sync_from_live). Triggered by labeling a
+  # PR "run vrt tests with fresh db", which the GitHub Actions workflow maps to
+  # vrt-mode=fresh-db.
+  vrt-on-label-fresh-db:
+    when:
+      and:
+        - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+        - equal: [ "fresh-db", << pipeline.parameters.vrt-mode >> ]
+    jobs:
+      - build
+      - vrt_sync_from_live:
+          requires:
+            - build
+      - playwright-vrt-test:
+          requires:
+            - vrt_sync_from_live
+      - playwright-vrt-merge-results:
+          requires:
+            - playwright-vrt-test:
+              - success
+              - failed
+              - canceled
+
   build-deploy-acquia:
     when:
       not:
