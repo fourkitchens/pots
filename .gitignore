@@ -1,3 +1,4 @@
 /vendor/
 acli
 .circleci/scripts/security-updates/projects_to_update.txt
+.idea

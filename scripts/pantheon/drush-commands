@@ -36,6 +36,10 @@ else
   echo "SYNC_CONFIG is set to 'NO'. Leaving configuration alone."
 fi
 
+# Run post-update / deploy hooks.
+echo "Running deploy hooks."
+terminus -n drush "$P_SITE.$P_ENV" -- deploy:hook -y
+
 echo "Clearing the Edge cache."
 # Clear the environment cache
 terminus -n env:clear-cache "$P_SITE.$P_ENV"

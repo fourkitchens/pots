@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -eo pipefail
+
+#
+# Refresh a Pantheon multidev with content from the canonical (live) environment
+# and run the standard deploy commands against it. Intended for the VRT
+# "fresh db" workflow, so visual regression runs against the branch's code
+# applied on top of live content.
+#
+
+# Authenticate with Terminus (idempotent).
+if [[ -z "$( terminus whoami )" ]]; then
+  echo "Logging in to terminus"
+  terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+else
+  echo "Using existing terminus session"
+fi
+
+# Safety guard: only refresh multidev environments. Never clone live content
+# over the protected dev/test/live environments.
+if [[ "$TERMINUS_ENV" == "live" || "$TERMINUS_ENV" == "test" || "$TERMINUS_ENV" == "dev" ]]; then
+  echo "Refusing to sync content into '$TERMINUS_ENV'. This is intended for multidev environments only."
+  exit 1
+fi
+
+# Clone the database AND files from the canonical environment (default: live)
+# into the multidev. Omitting --db-only/--files-only clones both.
+echo "Cloning database and files from $CANONICAL_ENV into $TERMINUS_ENV."
+terminus -n env:clone-content "$TERMINUS_SITE.$CANONICAL_ENV" "$TERMINUS_ENV" --yes
+
+# Run the standard post-deploy drush commands against the refreshed multidev.
+if [ -f "./.circleci/scripts/drush-commands" ]; then
+  ./.circleci/scripts/drush-commands "$TERMINUS_SITE" "$TERMINUS_ENV"
+else
+  ./vendor/fourkitchens/pots/scripts/pantheon/drush-commands "$TERMINUS_SITE" "$TERMINUS_ENV"
+fi
+
+echo "Done refreshing $TERMINUS_ENV from $CANONICAL_ENV."

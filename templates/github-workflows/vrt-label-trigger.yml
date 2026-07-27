@@ -1,0 +1,49 @@
+# Template — copy this into your project's .github/workflows/ directory.
+#
+# Triggers the CircleCI VRT pipeline when a pull request is labeled. It maps the
+# label to the `vrt-mode` pipeline parameter and starts a pipeline on the PR's
+# head branch via the CircleCI API v2.
+#
+# Prerequisites:
+#   - Create the two labels on the repo: "run vrt tests" and "run vrt tests with fresh db".
+#   - Add a CircleCI personal API token (a machine/bot user is recommended) as the
+#     repository Actions secret CIRCLECI_TOKEN.
+#
+# Note: for pull requests opened from forks, GitHub does not expose secrets and the
+# head branch does not exist in this repo, so VRT triggering will not work for fork PRs.
+
+name: Trigger CircleCI VRT
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  trigger:
+    # Only react to the two VRT labels.
+    if: >-
+      github.event.label.name == 'run vrt tests' ||
+      github.event.label.name == 'run vrt tests with fresh db'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger CircleCI pipeline
+        # User-controlled values are passed via env (never inlined into the shell)
+        # to avoid script injection.
+        env:
+          CIRCLE_TOKEN: ${{ secrets.CIRCLECI_TOKEN }}
+          LABEL: ${{ github.event.label.name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$LABEL" in
+            "run vrt tests with fresh db") MODE="fresh-db" ;;
+            "run vrt tests")               MODE="plain" ;;
+            *) echo "Unexpected label: $LABEL"; exit 1 ;;
+          esac
+          echo "Triggering CircleCI VRT (vrt-mode=$MODE) for branch $HEAD_REF"
+          curl -sSf -X POST \
+            "https://circleci.com/api/v2/project/gh/${REPO}/pipeline" \
+            -H "Circle-Token: ${CIRCLE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"branch\":\"${HEAD_REF}\",\"parameters\":{\"vrt-mode\":\"${MODE}\"}}"

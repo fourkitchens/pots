@@ -34,6 +34,28 @@ CI_PROJECT_NAME=${CI_PROJECT_NAME:-$CIRCLE_PROJECT_REPONAME}
 CI_BUILD=${CI_BUILD:-NO}
 
 # Circle sets both $CIRCLE_PULL_REQUEST and $CI_PULL_REQUEST.
+
+if [ -z "$CI_PULL_REQUEST" ]; then
+  echo "Double checking for PR on $CIRCLE_BRANCH to work around Circle platform bug."
+  # https://discuss.circleci.com/t/circle-pull-requests-environment-variable-not-being-set/29883/10
+  CI_PULL_REQUEST=`
+    curl -s -L \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls?head=$CIRCLE_PROJECT_USERNAME:$CIRCLE_BRANCH&state=open" \
+      | grep -o '/pulls/[0-9]*' \
+      | head -1 \
+      | grep -o '[0-9]*' \
+      || true
+  `
+  if [ -z "$CI_PULL_REQUEST" ]; then
+    echo "No PR found.  If this is not a mainline or long-running branch, then you'll likely run into the 'We do not build CI environments' error later."
+  else
+    echo "Found PR $CI_PULL_REQUEST"
+  fi
+fi
+
 PR_NUMBER=${PR_NUMBER:-$CI_PULL_REQUEST}
 PR_NUMBER=${PR_NUMBER##*/}
 
@@ -51,10 +73,11 @@ DEFAULT_SITE=${DEFAULT_SITE:-$SITE_NAME}
 DEFAULT_ENV=ci-$CI_BUILD_NUMBER
 
 MAIN_BRANCH=${MAIN_BRANCH:-"master"}
-DEVELOPMENT_BRANCH="develop"
-DEVELOPMENT_ENV="github-dev"
-REBUILD_DEVELOPMENT_ENV_EVERY_PUSH="NO"
-REBUILD_MULTIDEV_ENV_EVERY_PUSH="NO"
+DEVELOPMENT_BRANCH=${DEVELOPMENT_BRANCH:-"develop"}
+DEVELOPMENT_ENV=${DEVELOPMENT_ENV:-"github-dev"}
+REBUILD_DEVELOPMENT_ENV_EVERY_PUSH=${REBUILD_DEVELOPMENT_ENV_EVERY_PUSH:-"NO"}
+REBUILD_MULTIDEV_ENV_EVERY_PUSH=${REBUILD_DEVELOPMENT_ENV_EVERY_PUSH:-"NO"}
+SYNC_LIVE_TO_TEST_ON_DEPLOY=${SYNC_LIVE_TO_TEST_ON_DEPLOY:-"YES"}
 
 # Set up our default git config settings if git is available.
 git config --global user.email "${GIT_EMAIL:-no-reply+ci-$CI_BUILD_NUMBER@getpantheon.com}"
@@ -148,6 +171,7 @@ fi
   echo "export DEVELOPMENT_ENV=$DEVELOPMENT_ENV"
   echo "export REBUILD_DEVELOPMENT_ENV_EVERY_PUSH=$REBUILD_DEVELOPMENT_ENV_EVERY_PUSH"
   echo "export REBUILD_MULTIDEV_ENV_EVERY_PUSH=$REBUILD_MULTIDEV_ENV_EVERY_PUSH"
+  echo "export SYNC_LIVE_TO_TEST_ON_DEPLOY=$SYNC_LIVE_TO_TEST_ON_DEPLOY"
   # TODO: Reconcile with environment variables set by build:project:create
   echo 'export BEHAT_ADMIN_PASSWORD=$(openssl rand -base64 24)'
   echo 'export BEHAT_ADMIN_USERNAME=pantheon-ci-testing-$CI_BUILD_NUMBER'
@@ -161,6 +185,12 @@ fi
   echo "export ARTIFACTS_FULL_DIR='/tmp/artifacts'"
   echo "export CANONICAL_ENV='$CANONICAL_ENV'"
 ) >> $BASH_ENV
+
+# Reconcile token variable names: everything else in POTS uses TERMINUS_TOKEN,
+# but this script historically read only TERMINUS_MACHINE_TOKEN, so its Terminus
+# login and SITE_UUID lookup silently no-op'd on most projects. Prefer
+# TERMINUS_TOKEN and fall back to the legacy name for back-compat.
+TERMINUS_MACHINE_TOKEN=${TERMINUS_MACHINE_TOKEN:-$TERMINUS_TOKEN}
 
 # If a Terminus machine token and site name are defined
 if hash terminus 2>/dev/null && [[ -n "$TERMINUS_MACHINE_TOKEN" && -n "$TERMINUS_SITE" ]]
