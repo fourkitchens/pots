@@ -186,6 +186,12 @@ fi
   echo "export CANONICAL_ENV='$CANONICAL_ENV'"
 ) >> $BASH_ENV
 
+# Reconcile token variable names: everything else in POTS uses TERMINUS_TOKEN,
+# but this script historically read only TERMINUS_MACHINE_TOKEN, so its Terminus
+# login and SITE_UUID lookup silently no-op'd on most projects. Prefer
+# TERMINUS_TOKEN and fall back to the legacy name for back-compat.
+TERMINUS_MACHINE_TOKEN=${TERMINUS_MACHINE_TOKEN:-$TERMINUS_TOKEN}
+
 # If a Terminus machine token and site name are defined
 if hash terminus 2>/dev/null && [[ -n "$TERMINUS_MACHINE_TOKEN" && -n "$TERMINUS_SITE" ]]
 then
