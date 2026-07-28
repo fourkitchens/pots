@@ -794,15 +794,16 @@ Note: ClickUp validates `status` before custom fields, so a bad `status` can mas
 `client_id`. If a create returns HTTP 400, check the `ECODE`: `CRTSK_001` = status name not
 found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
 
-### Steps to set IA key
+### Steps to set the AI key (optional)
 
-AutoSec has been developed to use IA and obtain some functional tests of the packages it updates automatically. These steps are added to the PR documentation, thus providing important information to the developer performing the tests.
+AutoSec can use AI to generate functional testing steps for the packages it updates automatically. These steps are added to the PR body, giving the developer performing the tests useful guidance.
 
-The AI implementation was carried out through the ChatGPT API, therefore, a key is required to be generated and added to CircleCI. It is important to say that the use of this key has a cost for each request, so the configuration of said key is totally optional, the system is made to check if a key exists, it asks ChatGPT for the steps and if it doesn't have the key configured, it doesn't do any request.
+The AI integration uses the OpenAI API, so a key must be generated and added to CircleCI. Each request has a cost, so the key is entirely optional: the script checks whether `OPENAI_API_KEY` is set and, if it isn't, simply skips the AI request. Any AI failure is also non-fatal — the security PR is still created without the AI section.
 
-1. Generate a new API Key, navigate to [OpenIA](https://platform.openai.com/login?launch) page and login, select the API console.
-2. Navigate to "API Keys" in the left sidebar (hover on OpenIA logo).
-3. Click the "Create new secret key" button and copy the hash code.
-4. Add the API Key to CircleCI, navigate: ` Project Settings -> SSH keys -> Environment Variables `.
+1. Generate a new API Key: navigate to the [OpenAI platform](https://platform.openai.com/login?launch), log in, and open the API console.
+2. Navigate to "API Keys" in the left sidebar (hover on the OpenAI logo).
+3. Click the "Create new secret key" button and copy the value.
+4. Add the API Key to CircleCI: ` Project Settings -> Environment Variables `.
 5. Click the "Add Environment Variable" button.
-6. The variable name must to be: `OPENAI_API_KEY`, and the value paste the hash code of the step 3.
+6. Name it `OPENAI_API_KEY` and paste the value from step 3.
+7. (Optional) Add an `OPENAI_MODEL` env var to choose the model. When unset it defaults to `gpt-4o-mini`.

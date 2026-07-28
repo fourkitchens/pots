@@ -21,12 +21,12 @@ TEST_STEPS=""
 PROJECTS_UPDATED=""
 
 # Helper function to check if branch exist on remote repository.
+# Echoes "true" if the branch already exists on the remote, "false" otherwise. It must
+# NOT exit: it runs inside $( ... ), so an exit here would only kill the subshell and the
+# caller would silently keep working on the current branch (main/master).
 gh_branch_exist () {
-
-# Check if branch already exists
-  if [[ `git ls-remote --head origin $BRANCH_NAME` ]]; then
+  if [[ `git ls-remote --heads origin $BRANCH_NAME` ]]; then
     echo "true"
-    exit 1
   else
     # Branch does not yet exist
     echo "false"
@@ -64,6 +64,9 @@ if [[ $(security_updates_available) == "true" ]]; then
     echo "Creating Git branch for the sec update..."
     create_gh_branch
     echo "Git branch created."
+  else
+    echo "Branch $BRANCH_NAME already exists; checking it out."
+    git checkout "$BRANCH_NAME"
   fi
 
   # Loop through each key-value pair in the "advisories" object.
@@ -91,12 +94,15 @@ if [[ $(security_updates_available) == "true" ]]; then
           AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
         fi
         MESSAGE+="${AUX}\n"
-        # IA Genereted Testing steps.
+        # AI-generated testing steps (optional). A failure here must never abort the
+        # update run, so the call is non-fatal and we only append when it returned text.
         if [ -n "${OPENAI_API_KEY}" ]; then
-          PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional teststing instructions for it?"
-          OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT")
-          TEST_STEPS+="### IA testing instructions for the project ${PROJECT}:\n"
-          TEST_STEPS+="${OPENAI_RESPONSE}\n"
+          PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional testing instructions for it?"
+          OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT" || true)
+          if [ -n "$OPENAI_RESPONSE" ]; then
+            TEST_STEPS+="### AI testing instructions for the project ${PROJECT}:\n"
+            TEST_STEPS+="${OPENAI_RESPONSE}\n"
+          fi
         fi
         echo "Updated $PROJECT"
         echo "---------------"
