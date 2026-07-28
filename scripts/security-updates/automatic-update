@@ -7,7 +7,6 @@ echo "Updating projects"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
-UNIX_TIMESTAMP_MS=$(($(date -d "$NOW" '+%s')*1000))
 cd $DIR
 source "./vendor/fourkitchens/pots/scripts/security-updates/4k-openai-lib.sh"
 BRANCH_NAME="feature/automated-sec-update-$NOW"
@@ -113,18 +112,32 @@ if [[ $(security_updates_available) == "true" ]]; then
   echo "-------------------------------------------"
   git push --set-upstream origin $BRANCH_NAME
 
-  # Create the PR
+  # Create the ClickUp ticket + the PR.
   if [ -z "$MESSAGE" ]
   then
     echo "Nothing to update."
   else
+    TITLE="(AUTO-SEC): Security updates for $NOW"
+
+    # Create a ClickUp ticket first (via the overridable script), so its URL can be linked
+    # in the PR body. The script prints the ticket URL (empty when ClickUp is unconfigured
+    # or the API call fails) and always exits 0, so it can never fail the security PR.
+    if [ -f "./.circleci/scripts/security-updates/create-clickup-ticket" ]; then
+      TICKET_URL=$(./.circleci/scripts/security-updates/create-clickup-ticket "$PROJECTS_UPDATED" || true)
+    else
+      TICKET_URL=$(./vendor/fourkitchens/pots/scripts/security-updates/create-clickup-ticket "$PROJECTS_UPDATED" || true)
+    fi
+
+    # Create the PR, linking the ClickUp ticket if one was created.
     echo "Creating security updates Pull request."
     echo "-------------------------------------------"
-    # Preparing variables
-    TITLE="(AUTO-SEC): Security updates for $NOW"
-    BODY=`cat ./vendor/fourkitchens/pots/scripts/security-updates/PULL_REQUEST_TEMPLATE.md`
+    if [ -z "$TICKET_URL" ]; then
+      TICKET_URL="_No ClickUp ticket was created for this update._"
+    fi
+    BODY=$(cat ./vendor/fourkitchens/pots/scripts/security-updates/PULL_REQUEST_TEMPLATE.md)
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
     BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
+    BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
     if [ ! -z "$SITE_NAME" ]; then
       BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
     fi
@@ -151,83 +164,6 @@ if [[ $(security_updates_available) == "true" ]]; then
       echo "Failed to create pull request: $TITLE. HTTP status code: $http_status"
       echo "-------------------------------------------"
       exit 1
-    fi
-
-    # Create a ticket for ClickUp.
-    if [ -n "${CU_REQUESTER_ID}" -a -n "${CU_TOKEN}" -a -n "${CU_LEAD_EMAIL}" ]; then
-
-      # Creating ClickUp ticket.
-      echo "Creating security updates ClickUp Ticket."
-      echo "-------------------------------------------"
-      CU_API=https://api.clickup.com/api/v2
-      # Environment variables; should be defined as CircleCI variables.
-      # CU_CLIENT_ID: Look in ClickUp for id. e.g. 16
-      # CU_REQUESTER_ID: Look in ClickUp for id. e.g. 54648604
-      # CU_LIST_ID: Look in ClickUp for id. e.g. 901300865356
-      # CU_TOKEN: Located in 1Pass.
-      # CU_LEAD_EMAIL: Find lead in engagements database.
-
-      CU_BODY_MESSAGE=`cat ./vendor/fourkitchens/pots/scripts/security-updates/TICKET_TEMPLATE.md`
-      # Replacing placeholders in the template.
-      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
-      # Scraping new line characters.
-      CU_BODY_MESSAGE=${CU_BODY_MESSAGE//$'\n'/\\n}
-      CU_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
-      CU_JSON_DATA=$(printf '{
-                               "name": "%s",
-                               "assignees": [
-                                 82036728
-                               ],
-                               "tags": [
-                                 "autosec update"
-                               ],
-                               "status": "in progress",
-                               "priority": 2,
-                               "start_date": "%s",
-                               "start_date_time": false,
-                               "notify_all": false,
-                               "parent": null,
-                               "links_to": null,
-                               "check_required_custom_fields": true,
-                               "custom_fields": [
-                                 {
-                                   "id": "b8bbcb75-a7c8-4eb7-9202-e56d227eefbf",
-                                   "value": "%s"
-                                 }
-                               ],
-                               "description": "%s"
-                             }' "$CU_TICKET_TITLE" "$UNIX_TIMESTAMP_MS" "$CU_CLIENT_ID" "$CU_BODY_MESSAGE")
-
-        # Create the ticket and capture the response.
-        RESPONSE=$(
-            curl -s ${CU_API}/list/901300865356/task \
-              -i -X POST \
-              -H "Authorization: ${CU_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "$CU_JSON_DATA"
-          )
-
-        # Extract the task id from the response; I could not get jq to work.
-        TASK_ID=$(echo "$RESPONSE" | awk -F'"id":' '{print $2}' | awk -F',' '{print $1}' | sed 's/"//g' | tr -d '[:space:]')
-
-        # Use the task id to add the requester to the "Requester" custom field.
-        CU_JSON_DATA_REQUESTER=$(printf '{
-                                               "value": {
-                                                 "add": [
-                                                   %s
-                                                 ]
-                                               }
-                                             }' "$CU_REQUESTER_ID")
-
-        curl -s ${CU_API}/task/${TASK_ID}/field/601d8088-a5d6-41c2-ad32-9bec68eac624 \
-                  -X POST \
-                  -H "Content-Type: application/json" \
-                  -H "Authorization: ${CU_TOKEN}" \
-                  -d "$CU_JSON_DATA_REQUESTER"
-
-        echo "ClickUp Ticket successfully created."
-        echo "-------------------------------------------"
     fi
   fi
 else

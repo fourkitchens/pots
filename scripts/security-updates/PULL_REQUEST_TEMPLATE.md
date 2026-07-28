@@ -2,7 +2,7 @@
 [UPDATED_MODULES]
 
 ### Ticket(s):
-https://advomatic.zendesk.com/hc/en-us/requests/XXXX
+[TICKET_URL]
 
 ### Pull Request Environment:
 https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/
