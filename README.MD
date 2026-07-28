@@ -328,17 +328,11 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
     **TODO:** FLESH THIS OUT MORE WITH HELP ON HOW TO GET IT
 13. Click "Add Environment Variable" to accept the changes.
 14. Click "Add Environment Variable".
-15. Type "ZD_REQUESTER_ID" in the name.
-16. Type Client requester id into "Value". The user ID can be obtained from the user's url. e.g. https://advomatic.zendesk.com/agent/users/378771022972/requested_tickets
+15. Type "CU_TOKEN" in the name.
+16. Paste your ClickUp API token into "Value" (stored in 1Password). This is the only
+    ClickUp secret; the rest of the ClickUp settings travel in the `click-data` pipeline
+    parameter — see [Automatic Security Updates](#automatic-security-updates) below.
 17. Click "Add Environment Variable" to accept the changes.
-18. Click "Add Environment Variable".
-19. Type "ZD_TOKEN" in the name.
-20. Type Zendesk token value id into "Value". This token is stored into 1password.
-21. Click "Add Environment Variable" to accept the changes.
-22. Click "Add Environment Variable".
-23. Type "ZD_LEAD_EMAIL" in the name.
-24. Type Project lead email value id into "Value". The projects lead email.
-25. Click "Add Environment Variable" to accept the changes.
 
 ## Configure CircleCI config.yml
 There are many options you have, some shared, and some hosting specific.
@@ -740,8 +734,8 @@ To make it trigger recluntly we have a couple of options:
 To make the Automatic security updates works for our project, we will require to follow the next steps:
 
 - Create a new set of SSH keys to be able to push the changes back to github (github deploy key)
-- Configure the Zendesk integration (Environment variables - already documented at the top)
-- (Optional) Configure the the IA integration (Open IA)
+- (Optional) Configure the ClickUp integration, so a ticket is created for each security-update PR
+- (Optional) Configure the AI integration (OpenAI)
 
 ### Steps to set the keys
 When continuous integration is configured on a project, CircleCI generates a set of SSH keys and automatically adds the private key to CircleCI and the public key to GitHub. This way CircleCI will have access to the repository in GitHub, but this access is just read-only. Originally for POTS this access is enough since it only needs reading the repository on GitHub and writing on the platform where the website is hosted (Acquia, Pantheon, Platform, etc).
@@ -751,6 +745,54 @@ With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, b
 1. The keys must be generated, either with a command in the console through [this guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) or they can also be generated through [1password](https://developer.1password.com/docs/ssh/manage-keys/).
 2. Add the private key to CircleCI: ` Project Settings -> SSH keys -> Additional SSH Keys `.
 3. Add the public key to GitHub: ` Project Settings -> Deploy Keys `.
+
+### Steps to set the ClickUp integration (optional)
+
+When configured, AutoSec creates a ClickUp task for each security-update PR and links the
+task URL in the PR body. Ticketing is handled by
+`scripts/security-updates/create-clickup-ticket` and is entirely optional — if it is not
+configured, AutoSec still updates packages and opens the PR, just without a ticket.
+
+The API token is a CircleCI secret; the rest of the settings travel in the `click-data`
+pipeline parameter (a JSON blob) so they can be set per-trigger without touching config:
+
+1. **Token** — add a CircleCI project env var `CU_TOKEN` with your ClickUp API token
+   (`Project Settings -> Environment Variables`). Kept out of `click-data` because
+   pipeline parameters are readable via the CircleCI API/UI.
+2. **`click-data`** — the external trigger POST that sets `run-sec-updates-check` also sends
+   `click-data`, a JSON object with these keys:
+
+   | key           | required | value                                                            |
+   | ------------- | -------- | ---------------------------------------------------------------- |
+   | `list_id`     | yes      | ClickUp list the task is created in                              |
+   | `client_id`   | yes      | value for the "Client" custom field (a **drop-down option UUID**) |
+   | `status`      | no       | a status **name** on the list (omit to use the list's default)   |
+   | `assignee_id` | no       | ClickUp user id to assign                                        |
+
+   Example: `{"list_id":"901327866278","client_id":"<option-uuid>","status":"in progress"}`
+
+#### Finding the ids (with `CU_TOKEN` set)
+
+```bash
+# list_id — also visible in the list URL: .../v/li/<list_id>
+curl -s -H "Authorization: $CU_TOKEN" \
+  https://api.clickup.com/api/v2/team/<workspace_id>/space | jq '.spaces[] | {id, name}'
+curl -s -H "Authorization: $CU_TOKEN" \
+  https://api.clickup.com/api/v2/space/<space_id>/list | jq '.lists[] | {id, name}'
+
+# client_id — the "Client" custom field is a drop-down; use an option's UUID (.id), not a name.
+curl -s -H "Authorization: $CU_TOKEN" \
+  https://api.clickup.com/api/v2/list/<list_id>/field \
+  | jq '.fields[] | select(.name=="Client") | {type, options: .type_config.options}'
+
+# status — use the status NAME (not id/uuid). Omit the field to use the list default.
+curl -s -H "Authorization: $CU_TOKEN" \
+  https://api.clickup.com/api/v2/list/<list_id> | jq -r '.statuses[].status'
+```
+
+Note: ClickUp validates `status` before custom fields, so a bad `status` can mask a bad
+`client_id`. If a create returns HTTP 400, check the `ECODE`: `CRTSK_001` = status name not
+found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
 
 ### Steps to set IA key
 

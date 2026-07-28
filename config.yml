@@ -18,6 +18,16 @@ parameters:
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
+  click-data:
+    description: >
+      JSON blob of ClickUp settings for the AutoSec ticket, set by the same external
+      POST that triggers run-sec-updates-check. Unpacked by the automatic-update script.
+      Keys: list_id, client_id, assignee_id (optional), status (optional).
+      The ClickUp API token is NOT here — it is a CircleCI project env var (CU_TOKEN),
+      since pipeline parameters are readable via the CircleCI API/UI. Defaults to "{}"
+      (ticketing disabled).
+    type: string
+    default: "{}"
   run-playwright-e2e-tests:
     description: "Enables playwright E2E tests"
     type: boolean
@@ -89,6 +99,12 @@ env: &env
   # A github access token so the bot user can comment back on the commit.
   #
   # GITHUB_TOKEN: 12345678790abcdef
+
+  # ClickUp API token for the AutoSec ticket (kept out of the click-data pipeline
+  # parameter because parameters are readable via the CircleCI API/UI). The rest of the
+  # ClickUp settings travel in the click-data parameter.
+  #
+  # CU_TOKEN: pk_12345678_ABCDEF...
 
   ############################
   # ACQUIA SPECIFIC SETTINGS
@@ -361,6 +377,8 @@ jobs:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
+      # ClickUp settings for the AutoSec ticket, unpacked by the automatic-update script.
+      CLICK_DATA: << pipeline.parameters.click-data >>
     steps:
       - run:
           name: Upgrade composer
