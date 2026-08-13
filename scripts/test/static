@@ -38,12 +38,23 @@ FAIL=NO
 mkdir -p "$RESULTS_DIR"
 
 echo "Checking for left over conflict markers."
+# `git diff --check` with no revisions only inspects changes that have not been
+# committed yet. CI tests a clean checkout, so it never had anything to look at
+# and markers that were committed sailed straight through. Grep the tracked
+# files themselves instead, which still covers uncommitted edits for anyone
+# running this locally.
+#
+# Only `<<<<<<<` and `>>>>>>>` are matched. Git's own check also treats a bare
+# `=======` as a marker, but that is a Markdown or reStructuredText heading
+# underline at least as often as it is a conflict, and a real conflict leaves
+# the other two markers behind anyway.
 echo "<?xml version=\"1.0\" encoding=\"utf-8\"?> <testsuites>" >> $RESULTS_DIR/git-merge-marker.xml
 while IFS= read -r result
 do
   FAIL=YES
+  echo "Merge conflict marker detected: $result"
   echo "<testsuite package=\"git\" time=\"0\" tests=\"1\" errors=\"1\" name=\"$result\"><testcase time=\"0\" name=\"$result\"><error message=\"Merge conflict marker detected\"><![CDATA[line "$( echo "$result" | grep -o [0-9]*$)", Error Merge conflict marker detected]]  </error></testcase></testsuite>" >> $RESULTS_DIR/git-merge-marker.xml
-done < <( git diff --check | grep -oP ".*(?=: leftover conflict marker)" )
+done < <( git grep -InE '^(<{7}|>{7})( |$)' -- . ':(exclude)vendor' ':(exclude)*/node_modules' | cut -d: -f1,2 )
 echo "</testsuites>" >> $RESULTS_DIR/git-merge-marker.xml
 
 
