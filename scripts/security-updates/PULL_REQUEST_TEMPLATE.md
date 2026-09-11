@@ -4,13 +4,16 @@
 ### Ticket(s):
 [TICKET_URL]
 
+### Database updates and configuration changes:
+[CONFIG_CHANGES]
+
 ### Pull Request Environment:
 https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/
 
 ### Functional Testing:
 - [ ] Checkout this branch
-- [ ] Run `gulp run -t rebuild`
-- [ ] Navigate to [page](https://pr-[PR-NUMBER]-[PROJECT].pantheonsite.io/) and verify...
+- [ ] Review the configuration commits above and confirm each change belongs to the module that caused it
+- [ ] Navigate to the [pull request environment](https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/) and verify the site loads
 [ADDITIONAL_TESTING]
 
 ### Notes:

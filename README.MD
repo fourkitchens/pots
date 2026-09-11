@@ -57,9 +57,11 @@ Whatever you want it to stand for.  Here's some options:
 * [Configure Composer.json](#configure-composerjson)
 * [Configure Scripts](#configure-scripts)
    + [Pantheon Specific Scripts](#pantheon-specific-scripts)
-* [Automatic security Updates](#automatic-security-updates)
+* [Automatic Security Updates](#automatic-security-updates)
    + [Steps to set the keys](#steps-to-set-the-keys)
-   + [Steps to set IA key](#steps-to-set-ia-key)
+   + [Steps to set the ClickUp integration (optional)](#steps-to-set-the-clickup-integration-optional)
+   + [Steps to set the AI key (optional)](#steps-to-set-the-ai-key-optional)
+   + [Database updates and configuration export](#database-updates-and-configuration-export)
 
 ## Upgrading
 
@@ -85,6 +87,49 @@ jobs use the `playwright-executor`) and add the `install-terminus` step to each 
 uses Terminus, exactly as shipped in the current `config.yml`. Terminus is now installed
 at runtime and pinned via the new `terminus-version` and `terminus-build-tools-version`
 parameters — set those if you need versions other than the defaults.
+
+### Enabling the AutoSec database phase
+
+AutoSec now runs the database updates a security release ships and commits the
+configuration they change. The scripts come with the package, but the job needs a database
+sidecar, so hand-merge this into your `.circleci/config.yml`:
+
+```diff
+ parameters:
++  mariadb-version:
++    description: >
++      cimg/mariadb tag for the database sidecar the AutoSec job uses to run Drupal's
++      database updates. Match your production database version where you can.
++    type: string
++    default: "10.11"
+   terminus-version:
+
+ jobs:
+   security_updates_check:
+     <<: *defaults
++    resource_class: medium
+     docker:
+       - image: cimg/php:<< pipeline.parameters.php-version >>
++      - image: cimg/mariadb:<< pipeline.parameters.mariadb-version >>
+     ...
+     steps:
+       ...
+       - add_ssh_keys
++      - run:
++          name: Install the MariaDB client
++          command: sudo apt-get update && sudo apt-get install -y mariadb-client
+       - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
+       - run:
+           name: Check security updates
++          no_output_timeout: 30m
+           command: |
+```
+
+Then check the requirements in
+[Database updates and configuration export](#database-updates-and-configuration-export) —
+in particular that `drush/drush` is in `require` and that your `settings.php` includes
+`settings.local.php`. If you would rather keep AutoSec's previous composer-only behaviour,
+merge the diff anyway and set `SEC_UPDATE_RUN_DB_UPDATES=NO`.
 
 ## Dependencies
 
@@ -361,6 +406,26 @@ to
 ```
 
 The following parameters exist:
+#### run-sec-updates-check
+This boolean triggers the [AutoSec](#automatic-security-updates) process. It is `false`
+by default and is not meant to be flipped in the file: an external scheduler (Evercurrent,
+or the CircleCI triggers UI) POSTs it as `true` to start a security-update run. When it is
+`true` the normal build/deploy workflow is skipped and only `security_updates_check` runs,
+and only on `main`/`master`.
+
+#### click-data
+A JSON blob of the non-secret ClickUp settings for the AutoSec ticket, sent by the same
+external POST that sets `run-sec-updates-check`. Defaults to `"{}"`, which disables
+ticketing. See [the ClickUp section](#steps-to-set-the-clickup-integration-optional) for
+the keys. The ClickUp API token is deliberately *not* in here — pipeline parameters are
+readable through the CircleCI API and UI, so the token is the `CU_TOKEN` env var instead.
+
+#### mariadb-version
+A string naming the `cimg/mariadb` tag used for the database sidecar that the AutoSec job
+runs Drupal's database updates against. Defaults to `"10.11"`. Match your production
+database version where you can. This container is only used by `security_updates_check`;
+it has nothing to do with your deployed environments.
+
 #### run-playwright-e2e-tests
 This boolean controls whether the Playwright end-to-end test job runs after the
 Pantheon multidev is created.
@@ -612,6 +677,35 @@ mandatory environment variables in this way as well.
 * `BASIC_PASS`: Optional password paired with `BASIC_USER` for HTTP basic
    authentication during Playwright E2E runs.
 
+### AutoSec Specific
+
+All optional — every one of these has a working default. See
+[Automatic Security Updates](#automatic-security-updates) for the full flow.
+
+* `CU_TOKEN`: ClickUp API token used to open a ticket for each security-update PR. When
+   unset, AutoSec still updates packages and opens the PR, just without a ticket.
+* `OPENAI_API_KEY`: Key for an OpenAI-compatible API used to generate functional testing
+   steps. When unset, the AI step is skipped entirely and the PR is created without it.
+* `OPENAI_API_BASE`: Root of the OpenAI-compatible API. Defaults to
+   `https://api.openai.com/v1`. Point it at any compatible provider, including free ones.
+* `OPENAI_MODEL`: Model id. Defaults to `gpt-4o-mini`.
+* `OPENAI_TIMEOUT`: Per-request timeout in seconds. Defaults to `45`.
+* `SEC_UPDATE_RUN_DB_UPDATES`: Set to `NO` to skip the database updates and configuration
+   export, leaving AutoSec with its composer-only behaviour. Defaults to `YES`.
+* `SEC_UPDATE_DB_ENV`: Environment to pull the AutoSec database from. Defaults to
+   `CANONICAL_ENV`, else `live`.
+* `SEC_UPDATE_CREATE_BACKUP`: Set to `YES` to create a fresh Pantheon backup before
+   downloading instead of using the most recent one. Defaults to `NO`.
+* `SEC_UPDATE_DB_DUMP`: Path to a local gzipped dump. When set, Terminus is skipped and
+   this file is imported instead. Intended for running the AutoSec scripts by hand.
+* `SEC_UPDATE_BASELINE_COMMIT`: What to do when a plain configuration export of the
+   *unmodified* site already differs from `./config`. `YES` (default) commits that
+   pre-existing drift as its own commit so the per-package commits stay attributable; `NO`
+   discards it; `ABORT` skips the configuration export altogether.
+* `CI_SETTINGS_FILE`: Settings file AutoSec writes the CI database credentials into,
+   relative to the project root. Must be a file your `settings.php` already includes.
+   Defaults to `$DOCROOT/sites/default/settings.local.php`.
+
 ### Pantheon Specific
 
 * `TERMINUS_TOKEN`: **Mandatory** The Pantheon machine token.
@@ -735,7 +829,8 @@ To make the Automatic security updates works for our project, we will require to
 
 - Create a new set of SSH keys to be able to push the changes back to github (github deploy key)
 - (Optional) Configure the ClickUp integration, so a ticket is created for each security-update PR
-- (Optional) Configure the AI integration (OpenAI)
+- (Optional) Configure the AI integration (OpenAI, or any compatible provider)
+- (Optional) Review the [database updates and configuration export](#database-updates-and-configuration-export), which is on by default
 
 ### Steps to set the keys
 When continuous integration is configured on a project, CircleCI generates a set of SSH keys and automatically adds the private key to CircleCI and the public key to GitHub. This way CircleCI will have access to the repository in GitHub, but this access is just read-only. Originally for POTS this access is enough since it only needs reading the repository on GitHub and writing on the platform where the website is hosted (Acquia, Pantheon, Platform, etc).
@@ -798,12 +893,146 @@ found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
 
 AutoSec can use AI to generate functional testing steps for the packages it updates automatically. These steps are added to the PR body, giving the developer performing the tests useful guidance.
 
-The AI integration uses the OpenAI API, so a key must be generated and added to CircleCI. Each request has a cost, so the key is entirely optional: the script checks whether `OPENAI_API_KEY` is set and, if it isn't, simply skips the AI request. Any AI failure is also non-fatal — the security PR is still created without the AI section.
+The integration is **entirely optional and cannot break a run**. `automatic-update` checks
+whether `OPENAI_API_KEY` is set and skips the request when it isn't, and every failure mode
+— no key, wrong key, unreachable endpoint, rate limit, timeout — is non-fatal: the request
+is abandoned, the reason is logged, and the security PR is created without the AI section.
+Requests are also capped by `OPENAI_TIMEOUT` (45s), so a hanging provider cannot stall the
+job.
 
-1. Generate a new API Key: navigate to the [OpenAI platform](https://platform.openai.com/login?launch), log in, and open the API console.
-2. Navigate to "API Keys" in the left sidebar (hover on the OpenAI logo).
-3. Click the "Create new secret key" button and copy the value.
-4. Add the API Key to CircleCI: ` Project Settings -> Environment Variables `.
-5. Click the "Add Environment Variable" button.
-6. Name it `OPENAI_API_KEY` and paste the value from step 3.
-7. (Optional) Add an `OPENAI_MODEL` env var to choose the model. When unset it defaults to `gpt-4o-mini`.
+1. Generate an API key with your chosen provider (see the table below).
+2. Add it to CircleCI: `Project Settings -> Environment Variables -> Add Environment Variable`.
+3. Name it `OPENAI_API_KEY` and paste the value.
+4. Unless you are using OpenAI itself, add `OPENAI_API_BASE` and `OPENAI_MODEL` too.
+
+#### Using a free provider
+
+**There is no free tier of OpenAI's own API.** What *is* free is a number of providers that
+speak the same Chat Completions protocol, so POTS reaches them with no code difference —
+only the base URL, the model and the key change:
+
+| Provider | `OPENAI_API_BASE` | `OPENAI_MODEL` | Free limits |
+| --- | --- | --- | --- |
+| OpenAI (default) | `https://api.openai.com/v1` | `gpt-4o-mini` | none — paid per request |
+| **Groq** (recommended) | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | 30 req/min, 1000 req/day, no credit card |
+| OpenRouter | `https://openrouter.ai/api/v1` | `meta-llama/llama-3.3-70b-instruct:free` | 20 req/min, 50 req/day |
+| Cerebras | Cerebras OpenAI-compatible endpoint | `llama-3.3-70b` | 30 req/min, no credit card |
+| Google Gemini | Gemini OpenAI-compatible endpoint | `gemini-2.0-flash` | 5–15 req/min |
+
+Groq is the recommendation for AutoSec: a run makes one request per updated package, so a
+handful per run — far inside 1000/day, and no card is required to sign up.
+
+Two things to weigh before pointing this at a free provider. Google states that prompts on
+the free Gemini tier may be used to improve its models outside the EU, UK and EEA. And the
+prompt contains the package names, the update hooks that ran and the configuration files
+that changed — no credentials or site content, but it does describe your site's stack, so
+check that this is acceptable for the project before enabling it.
+
+
+### Database updates and configuration export
+
+A security release often ships a `hook_update_N` or `hook_post_update_NAME` that rewrites
+configuration. Left alone, AutoSec would open a PR containing only the `composer.json` /
+`composer.lock` change, and the configuration half of the update would surface later, by
+hand, on somebody's local.
+
+So `security_updates_check` stands up a real, throwaway Drupal site inside the job: it
+restores your canonical database into a `cimg/mariadb` sidecar, runs the database updates
+each package brings with it, exports the configuration, and commits the result to the same
+AutoSec branch. This is on by default; set `SEC_UPDATE_RUN_DB_UPDATES=NO` to turn it off.
+
+#### What the job actually does
+
+1. `scripts/security-updates/setup-drupal-env` runs **once**, and only after AutoSec has
+   confirmed there is something to update — a run with no advisories never pays for a
+   database restore.
+   1. Resolves drush at `./vendor/bin/drush` and refuses to continue if it isn't there.
+   2. Waits for the database sidecar to accept connections.
+   3. Writes the CI database credentials to `CI_SETTINGS_FILE`.
+   4. Downloads the database with `terminus backup:get` and imports it. If `SANITIZE_SCRIPT`
+      is set, it is run against the restored database.
+   5. Confirms Drupal connects, then asks Drupal where its configuration sync directory is
+      and **aborts unless that directory really holds this site's configuration**.
+   6. `drush updatedb` to drain updates already pending on the canonical environment, then
+      `drush config:import` so the active configuration matches what is in git, then a
+      baseline `drush config:export`.
+2. Then, for **each** updated package, `scripts/security-updates/apply-db-updates` runs
+   `drush updatedb`, `drush config:export`, and commits any changed configuration as
+   `(AUTO-SEC): Exported configuration for <package>`.
+
+The result is one `composer.*` commit and (where there was anything to export) one
+configuration commit per package, so a reviewer can see exactly which module caused which
+configuration change.
+
+#### Why the `config:import` in step 1.6 matters
+
+It is the step that makes the diffs readable. A live database's configuration has almost
+always drifted from what is in `./config`. Export straight from a restored live database
+and that drift lands in the PR alongside the module's changes, burying them. Importing
+`./config` first means the only thing a later export can produce is what the update hooks
+actually changed.
+
+If the site's configuration is already drifted in a way a plain export reveals, that shows
+up as a separate `(AUTO-SEC): Baseline config export before security updates` commit, kept
+apart from the per-package commits. `SEC_UPDATE_BASELINE_COMMIT` controls this.
+
+#### Requirements
+
+* **`TERMINUS_TOKEN`**, already mandatory for Pantheon deploys, is used to pull the database.
+* **`drush/drush` must be in `require`, not `require-dev`** — CI installs with `--no-dev`.
+* **Your `settings.php` must include `settings.local.php` when it exists**, which is the
+  Pantheon scaffold's default and is what both of our reference projects do:
+  ```php
+  if (file_exists(__DIR__ . '/settings.local.php')) {
+    include __DIR__ . '/settings.local.php';
+  }
+  ```
+  If your project uses a different filename, point `CI_SETTINGS_FILE` at it. The file is
+  written at build time and never committed.
+* **`$settings['config_sync_directory']` must point at your real exported configuration**
+  in CI. This is the single most common way to get this wrong: a `config_sync_directory`
+  computed from an environment variable can resolve to an empty directory under CI, and an
+  export there would write your entire site configuration to the wrong place. AutoSec
+  checks for `system.site.yml` in whatever directory Drupal reports and refuses to export
+  if it isn't there.
+
+#### When something goes wrong
+
+Every failure in this phase is contained: it disables the database phase for the rest of
+the run, records the reason, and lets AutoSec finish the composer updates, the push and the
+PR. The reason is written into the PR body under "Database updates and configuration
+changes", prefixed with :warning:, so the reviewer knows the configuration still has to be
+exported by hand. Nothing here can prevent a security update from reaching a PR.
+
+Failures handled this way include: drush missing, no mysql client, the database never
+coming up, `settings.php` not picking up the CI settings file, a config sync directory that
+isn't the site's configuration, `config:import` failing, and `updatedb` or `config:export`
+failing for a package.
+
+#### Running it by hand
+
+Both scripts work outside CI, which is the quickest way to check a project is ready.
+`SEC_UPDATE_DB_DUMP` skips Terminus and imports a local dump instead:
+
+```bash
+docker run -d --name autosec-db --network autosec cimg/mariadb:10.11
+docker run --rm --network autosec -v "$PWD:/work" -w /work \
+  -e DOCROOT=web -e AUTOSEC_DB_HOST=autosec-db \
+  -e SEC_UPDATE_DB_DUMP=/work/db/site-db.sql.gz \
+  cimg/php:8.4 bash -c '
+    sudo apt-get update && sudo apt-get install -y mariadb-client
+    ./vendor/fourkitchens/pots/scripts/security-updates/setup-drupal-env'
+```
+
+`AUTOSEC_DB_HOST`, `AUTOSEC_DB_PORT`, `AUTOSEC_DB_NAME`, `AUTOSEC_DB_USER` and
+`AUTOSEC_DB_PASS` override the connection; the defaults match the CI sidecar.
+
+#### Overriding
+
+Both scripts follow the usual POTS override pattern — drop your own at
+`.circleci/scripts/security-updates/setup-drupal-env` or
+`.circleci/scripts/security-updates/apply-db-updates`. `setup-drupal-env` must leave
+`DRUSH`, `DRUPAL_ROOT` and `CONFIG_SYNC_DIR` in `$AUTOSEC_STATE_DIR/env` for
+`apply-db-updates` to source, and signal failure by creating `$AUTOSEC_STATE_DIR/disabled`.
+`apply-db-updates` must print its Markdown summary on stdout, log to stderr, and always
+exit 0.

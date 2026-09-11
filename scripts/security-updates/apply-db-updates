@@ -1,0 +1,112 @@
+#!/bin/bash
+#
+# Run the database updates a freshly updated package brings with it, export any resulting
+# configuration changes, and commit them to the AutoSec branch.
+#
+# Called by scripts/security-updates/automatic-update once per updated package, immediately
+# after that package's composer.* commit. Requires scripts/security-updates/setup-drupal-env
+# to have prepared the environment first.
+#
+# Inputs:
+#   $1                  The composer package that was just updated, e.g. drupal/media.
+#   AUTOSEC_STATE_DIR   Where setup-drupal-env left its state. Default: /tmp/autosec
+#
+# Output:
+#   A Markdown summary of what happened on stdout, for the PR body. All human-readable
+#   logging goes to stderr so the caller can capture the summary with $( ... ).
+#
+# Always exits 0. A failure here must never abort the security update run: the composer
+# updates, the push and the pull request still have to happen. When the database updates
+# fail the phase is disabled for the remainder of the run, because every later export would
+# be taken against a half-updated database and would be worse than no export at all.
+
+set -eo pipefail
+
+PROJECT="${1:-}"
+STATE_DIR="${AUTOSEC_STATE_DIR:-/tmp/autosec}"
+
+log()  { echo "[autosec:db] $*" >&2; }
+note() { mkdir -p "$STATE_DIR"; printf '%s\n' "$*" >> "$STATE_DIR/notes"; }
+
+if [ -z "$PROJECT" ]; then
+  log "No package name given; nothing to do."
+  exit 0
+fi
+
+# setup-drupal-env could not prepare a usable site, or an earlier package's updates failed.
+if [ -f "$STATE_DIR/disabled" ]; then
+  log "The database phase is disabled; skipping $PROJECT."
+  exit 0
+fi
+
+if [ ! -f "$STATE_DIR/env" ]; then
+  log "No prepared Drupal environment found; skipping $PROJECT."
+  exit 0
+fi
+
+# shellcheck source=/dev/null
+. "$STATE_DIR/env"
+
+DRUSH_CMD=( "$DRUSH" --root="$DRUPAL_ROOT" )
+
+##
+# Database updates.
+##
+log "Running database updates after updating $PROJECT"
+UPDB_LOG="$STATE_DIR/updatedb-$(echo "$PROJECT" | tr '/' '-').log"
+if ! "${DRUSH_CMD[@]}" updatedb -y > "$UPDB_LOG" 2>&1; then
+  cat "$UPDB_LOG" >&2
+  log "'drush updatedb' FAILED after updating $PROJECT."
+  note "\`drush updatedb\` failed after updating **$PROJECT**, so no configuration was exported for it or for any later package. Run the database updates and export the configuration by hand before merging."
+  : > "$STATE_DIR/disabled"
+  exit 0
+fi
+cat "$UPDB_LOG" >&2
+
+# Which update hooks actually ran. Drush logs "Update started: <hook>" per hook; fall back
+# to a plain count when the log format does not match.
+HOOKS="$( sed -n 's/.*Update started: *\([A-Za-z0-9_]*\).*/\1/p' "$UPDB_LOG" | sort -u | tr '\n' ' ' )"
+HOOKS="${HOOKS% }"
+
+"${DRUSH_CMD[@]}" cr >/dev/null 2>&1 || true
+
+##
+# Configuration export.
+##
+log "Exporting configuration"
+if ! "${DRUSH_CMD[@]}" config:export -y >&2; then
+  log "'drush config:export' FAILED after updating $PROJECT."
+  note "\`drush config:export\` failed after updating **$PROJECT**. Export the configuration by hand before merging."
+  : > "$STATE_DIR/disabled"
+  exit 0
+fi
+
+CHANGED="$( git status --porcelain -- "$CONFIG_SYNC_DIR" || true )"
+
+if [ -z "$CHANGED" ]; then
+  log "No configuration changes for $PROJECT."
+  if [ -n "$HOOKS" ]; then
+    echo "- **$PROJECT** — ran database updates (\`${HOOKS// /\`, \`}\`); no configuration changes."
+  fi
+  exit 0
+fi
+
+CHANGED_COUNT="$( printf '%s\n' "$CHANGED" | wc -l | tr -d ' ' )"
+git add -- "$CONFIG_SYNC_DIR"
+# stdout is reserved for the PR body summary; git's commit chatter goes to the log.
+git commit -m "(AUTO-SEC): Exported configuration for $PROJECT" >&2
+log "Committed $CHANGED_COUNT configuration file(s) for $PROJECT."
+
+##
+# Summary for the pull request body.
+##
+if [ -n "$HOOKS" ]; then
+  echo "- **$PROJECT** — ran database updates (\`${HOOKS// /\`, \`}\`) and exported $CHANGED_COUNT configuration file(s):"
+else
+  echo "- **$PROJECT** — exported $CHANGED_COUNT configuration file(s):"
+fi
+# List the files, capped so a large export cannot swamp the PR body.
+printf '%s\n' "$CHANGED" | awk '{ print $NF }' | sed "s|^|  - \`|;s|$|\`|" | head -20
+if [ "$CHANGED_COUNT" -gt 20 ]; then
+  echo "  - _...and $(( CHANGED_COUNT - 20 )) more._"
+fi

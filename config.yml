@@ -53,6 +53,12 @@ parameters:
     # This value must be a valid cimg/php tag, e.g. "8.4" or "8.4.2".
     # Standard CircleCI images support both major.minor and major.minor.patch.
     default: "8.4"
+  mariadb-version:
+    description: >
+      cimg/mariadb tag for the database sidecar the AutoSec job uses to run Drupal's
+      database updates. Match your production database version where you can.
+    type: string
+    default: "10.11"
   terminus-version:
     description: >
       Full Terminus version to install at runtime. Pin this for reproducible
@@ -110,6 +116,62 @@ env: &env
   # Defaults to gpt-4o-mini when unset.
   #
   # OPENAI_MODEL: gpt-4o-mini
+
+  # Optional: root of an OpenAI-compatible API for AutoSec's AI testing steps. Any provider
+  # that speaks the Chat Completions protocol works, including free tiers such as Groq and
+  # OpenRouter -- only this, OPENAI_MODEL and OPENAI_API_KEY change. See the README.
+  #
+  # Default: https://api.openai.com/v1
+  #
+  # OPENAI_API_BASE: https://api.groq.com/openai/v1
+
+  ##############################################################
+  # AUTOSEC DATABASE UPDATES AND CONFIGURATION EXPORT (OPTIONAL)
+  #
+  # AutoSec restores the canonical database into the job's database sidecar, applies the
+  # database updates each security release brings with it, and commits any configuration
+  # those updates changed. See the README for the full flow and its failure modes.
+  ##############################################################
+
+  # Set to NO to skip the database updates and configuration export entirely, leaving
+  # AutoSec with its composer-only behaviour.
+  #
+  # Default: YES
+  #
+  # SEC_UPDATE_RUN_DB_UPDATES: NO
+
+  # Environment to pull the AutoSec database from.
+  #
+  # Default: $CANONICAL_ENV, else "live"
+  #
+  # SEC_UPDATE_DB_ENV: dev
+
+  # Create a fresh Pantheon backup before downloading, instead of using the latest one.
+  #
+  # Default: NO
+  #
+  # SEC_UPDATE_CREATE_BACKUP: YES
+
+  # Path to a local gzipped dump. When set, Terminus is skipped and this file is imported
+  # instead. Intended for running the AutoSec scripts by hand outside CI.
+  #
+  # SEC_UPDATE_DB_DUMP: /tmp/site-db.sql.gz
+
+  # What to do when a plain configuration export of the unmodified site already differs
+  # from ./config (pre-existing drift). YES commits it as its own "Baseline config export"
+  # commit so the per-package commits stay attributable; NO discards it; ABORT skips the
+  # whole configuration export.
+  #
+  # Default: YES
+  #
+  # SEC_UPDATE_BASELINE_COMMIT: ABORT
+
+  # Settings file AutoSec writes the CI database credentials into, relative to the project
+  # root. It must be a file the project's settings.php already includes.
+  #
+  # Default: $DOCROOT/sites/default/settings.local.php
+  #
+  # CI_SETTINGS_FILE: web/sites/default/settings.circleci.php
 
   ############################
   # ACQUIA SPECIFIC SETTINGS
@@ -376,8 +438,14 @@ jobs:
 
   security_updates_check:
     <<: *defaults
+    # Restoring and updating a real database needs more than the small class &defaults sets.
+    resource_class: medium
     docker:
       - image: cimg/php:<< pipeline.parameters.php-version >>
+      # Database sidecar for the Drupal site AutoSec builds to run the database updates
+      # against. It provisions database "circle_test" for user "root" with an empty password
+      # on 127.0.0.1:3306, which is what setup-drupal-env targets by default.
+      - image: cimg/mariadb:<< pipeline.parameters.mariadb-version >>
     environment:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
@@ -402,9 +470,17 @@ jobs:
               ./vendor/fourkitchens/pots/scripts/set-environment
             fi
       - add_ssh_keys
+      # setup-drupal-env imports the database dump with the mysql client, which cimg/php
+      # does not ship.
+      - run:
+          name: Install the MariaDB client
+          command: sudo apt-get update && sudo apt-get install -y mariadb-client
       - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
       - run:
           name: Check security updates
+          # Downloading and importing a production database, then running the database
+          # updates, can easily outrun the default 10 minute silence timeout.
+          no_output_timeout: 30m
           command: |
               git config --global user.email "bender@fourkitchens.com"
               git config --global user.name "CI Bot"
