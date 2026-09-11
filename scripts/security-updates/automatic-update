@@ -180,16 +180,36 @@ if [[ $(security_updates_available) == "true" ]]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
     fi
 
-    # Create a ClickUp ticket first (via the overridable script), so its URL can be linked
-    # in the PR body. The script prints the ticket URL (empty when ClickUp is unconfigured
-    # or the API call fails) and always exits 0, so it can never fail the security PR.
-    TICKET_URL=$( "$( pots_file create-clickup-ticket )" "$PROJECTS_UPDATED" || true)
+    # Open a ticket first, so its URL can be linked in the PR body. The provider script
+    # gates itself on its own configuration, prints the ticket URL (empty when it is
+    # unconfigured or its API call fails) and always exits 0, so ticketing can never fail
+    # the security PR.
+    #
+    # TICKETING_SYSTEM is a CircleCI project env var, so moving a project from ClickUp to
+    # Productive is a one-click change that leaves its trigger POST alone.
+    TICKET_URL=""
+    case "${TICKETING_SYSTEM:-clickup}" in
+      none)
+        echo "Ticketing is disabled (TICKETING_SYSTEM=none)."
+        ;;
+      clickup|productive)
+        TICKET_SCRIPT=$( pots_file "create-${TICKETING_SYSTEM:-clickup}-ticket" )
+        if [ -x "$TICKET_SCRIPT" ]; then
+          TICKET_URL=$( "$TICKET_SCRIPT" "$PROJECTS_UPDATED" || true)
+        else
+          echo "No ticket script found at ${TICKET_SCRIPT}; skipping ticketing."
+        fi
+        ;;
+      *)
+        echo "Unknown TICKETING_SYSTEM '${TICKETING_SYSTEM}' (expected clickup, productive or none); skipping ticketing."
+        ;;
+    esac
 
-    # Create the PR, linking the ClickUp ticket if one was created.
+    # Create the PR, linking the ticket if one was created.
     echo "Creating security updates Pull request."
     echo "-------------------------------------------"
     if [ -z "$TICKET_URL" ]; then
-      TICKET_URL="_No ClickUp ticket was created for this update._"
+      TICKET_URL="_No ticket was created for this update._"
     fi
     BODY=$(cat "$( pots_file PULL_REQUEST_TEMPLATE.md )")
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}

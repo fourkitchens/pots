@@ -60,6 +60,7 @@ Whatever you want it to stand for.  Here's some options:
 * [Automatic Security Updates](#automatic-security-updates)
    + [Steps to set the keys](#steps-to-set-the-keys)
    + [Steps to set the ClickUp integration (optional)](#steps-to-set-the-clickup-integration-optional)
+   + [Steps to set the Productive.io integration (optional)](#steps-to-set-the-productiveio-integration-optional)
    + [Steps to set the AI key (optional)](#steps-to-set-the-ai-key-optional)
    + [Database updates and configuration export](#database-updates-and-configuration-export)
 
@@ -87,6 +88,42 @@ jobs use the `playwright-executor`) and add the `install-terminus` step to each 
 uses Terminus, exactly as shipped in the current `config.yml`. Terminus is now installed
 at runtime and pinned via the new `terminus-version` and `terminus-build-tools-version`
 parameters — set those if you need versions other than the defaults.
+
+### BREAKING: `click-data` is now `sec-update-data`
+
+AutoSec's ticketing configuration used one pipeline parameter per provider. That is now a
+single `sec-update-data` blob, with the provider chosen by a `TICKETING_SYSTEM` env var.
+**`click-data` no longer exists.**
+
+This one needs care, because CircleCI **fails any pipeline that receives a parameter the
+config does not declare**:
+
+```
+• Unexpected argument(s): click-data
+error: Config file "config.yml" contains compilation errors.
+```
+
+So for each project, the trigger POST and the `config.yml` merge have to land **together**.
+If you merge the config and leave the trigger alone, the next security run fails — and it
+fails at trigger time, nowhere near the change that caused it.
+
+Rename the parameter in your Evercurrent (or CircleCI triggers UI) POST body:
+
+```diff
+ {
+   "parameters": {
+     "run-sec-updates-check": true,
+-    "click-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
++    "sec-update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
+   }
+ }
+```
+
+The ClickUp keys inside the blob are unchanged, and `CU_TOKEN` stays exactly as it is, so
+for a project staying on ClickUp this is purely the rename above: `TICKETING_SYSTEM`
+defaults to `clickup` when unset. Moving a project to Productive is then a separate,
+independent step — see
+[Steps to set the Productive.io integration](#steps-to-set-the-productiveio-integration-optional).
 
 ### Enabling the AutoSec database phase
 
@@ -375,7 +412,7 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
 14. Click "Add Environment Variable".
 15. Type "CU_TOKEN" in the name.
 16. Paste your ClickUp API token into "Value" (stored in 1Password). This is the only
-    ClickUp secret; the rest of the ClickUp settings travel in the `click-data` pipeline
+    ClickUp secret; the rest of the settings travel in the `sec-update-data` pipeline
     parameter — see [Automatic Security Updates](#automatic-security-updates) below.
 17. Click "Add Environment Variable" to accept the changes.
 
@@ -413,12 +450,29 @@ or the CircleCI triggers UI) POSTs it as `true` to start a security-update run. 
 `true` the normal build/deploy workflow is skipped and only `security_updates_check` runs,
 and only on `main`/`master`.
 
-#### click-data
-A JSON blob of the non-secret ClickUp settings for the AutoSec ticket, sent by the same
+#### sec-update-data
+A JSON blob of the non-secret ticketing settings for the AutoSec ticket, sent by the same
 external POST that sets `run-sec-updates-check`. Defaults to `"{}"`, which disables
-ticketing. See [the ClickUp section](#steps-to-set-the-clickup-integration-optional) for
-the keys. The ClickUp API token is deliberately *not* in here — pipeline parameters are
-readable through the CircleCI API and UI, so the token is the `CU_TOKEN` env var instead.
+ticketing.
+
+Which keys matter depends on `TICKETING_SYSTEM` (a CircleCI project env var, not a
+parameter), because only one ticketing system is ever active for a project:
+
+| key                  | used by    | required | value                                                       |
+| -------------------- | ---------- | -------- | ----------------------------------------------------------- |
+| `list_id`            | clickup    | yes      | ClickUp list the task is created in                          |
+| `client_id`          | clickup    | yes      | value for the "Client" custom field (a drop-down option UUID)|
+| `status`             | clickup    | no       | a status **name** on the list                                |
+| `organization_id`    | productive | yes      | Productive organization id (`X-Organization-Id`)             |
+| `project_id`         | productive | yes      | the project (workspace) the task is created in               |
+| `task_list_id`       | productive | no       | task list / milestone to file the task under                 |
+| `board_id`           | productive | no       | board (folder) to file the task under                        |
+| `workflow_status_id` | productive | no       | workflow status to open the task in                          |
+| `task_url_template`  | productive | no       | override the link built for the PR body                      |
+| `assignee_id`        | both       | no       | user/person id to assign                                     |
+
+The API token is deliberately *not* in here — pipeline parameters are readable through the
+CircleCI API and UI, so the token is the `CU_TOKEN` or `PRODUCTIVE_TOKEN` env var instead.
 
 #### mariadb-version
 A string naming the `cimg/mariadb` tag used for the database sidecar that the AutoSec job
@@ -684,6 +738,13 @@ All optional — every one of these has a working default. See
 
 * `CU_TOKEN`: ClickUp API token used to open a ticket for each security-update PR. When
    unset, AutoSec still updates packages and opens the PR, just without a ticket.
+* `PRODUCTIVE_TOKEN`: Productive.io API token, the equivalent of `CU_TOKEN`. Unset means
+   no Productive ticket, and nothing else changes.
+* `TICKETING_SYSTEM`: Which ticketing system AutoSec opens a ticket in. One of `clickup`
+   (the default when unset), `productive`, or `none`. It is an env var rather than a
+   pipeline parameter on purpose: migrating a project from ClickUp to Productive is then a
+   one-click change in Project Settings, and its trigger POST never has to be touched. An
+   unrecognised value logs a warning and skips ticketing; it never fails the PR.
 * `OPENAI_API_KEY`: Key for an OpenAI-compatible API used to generate functional testing
    steps. When unset, the AI step is skipped entirely and the PR is created without it.
 * `OPENAI_API_BASE`: Root of the OpenAI-compatible API. Defaults to
@@ -828,7 +889,7 @@ To make it trigger recluntly we have a couple of options:
 To make the Automatic security updates works for our project, we will require to follow the next steps:
 
 - Create a new set of SSH keys to be able to push the changes back to github (github deploy key)
-- (Optional) Configure the ClickUp integration, so a ticket is created for each security-update PR
+- (Optional) Configure the ClickUp and/or Productive.io integration, so a ticket is created for each security-update PR
 - (Optional) Configure the AI integration (OpenAI, or any compatible provider)
 - (Optional) Review the [database updates and configuration export](#database-updates-and-configuration-export), which is on by default
 
@@ -848,14 +909,16 @@ task URL in the PR body. Ticketing is handled by
 `scripts/security-updates/create-clickup-ticket` and is entirely optional — if it is not
 configured, AutoSec still updates packages and opens the PR, just without a ticket.
 
-The API token is a CircleCI secret; the rest of the settings travel in the `click-data`
-pipeline parameter (a JSON blob) so they can be set per-trigger without touching config:
+ClickUp is the default, so there is nothing to select. The API token is a CircleCI secret;
+the rest of the settings travel in the `sec-update-data` pipeline parameter (a JSON blob)
+so they can be set per-trigger without touching config:
 
 1. **Token** — add a CircleCI project env var `CU_TOKEN` with your ClickUp API token
-   (`Project Settings -> Environment Variables`). Kept out of `click-data` because
+   (`Project Settings -> Environment Variables`). Kept out of `sec-update-data` because
    pipeline parameters are readable via the CircleCI API/UI.
-2. **`click-data`** — the external trigger POST that sets `run-sec-updates-check` also sends
-   `click-data`, a JSON object with these keys:
+2. **`TICKETING_SYSTEM`** — leave it unset, or set it to `clickup` to be explicit.
+3. **`sec-update-data`** — the external trigger POST that sets `run-sec-updates-check` also
+   sends `sec-update-data`, a JSON object with these keys:
 
    | key           | required | value                                                            |
    | ------------- | -------- | ---------------------------------------------------------------- |
@@ -888,6 +951,80 @@ curl -s -H "Authorization: $CU_TOKEN" \
 Note: ClickUp validates `status` before custom fields, so a bad `status` can mask a bad
 `client_id`. If a create returns HTTP 400, check the `ECODE`: `CRTSK_001` = status name not
 found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
+
+### Steps to set the Productive.io integration (optional)
+
+Four Kitchens is moving from ClickUp to Productive, so AutoSec ships both and switching is
+a configuration change rather than a code change.
+
+**Migrating a project** is one value: set the `TICKETING_SYSTEM` env var to `productive` in
+`Project Settings -> Environment Variables`. The trigger POST does not change — only the
+contents of `sec-update-data` do, since the two systems read different keys out of it.
+
+| `TICKETING_SYSTEM` | Result |
+| --- | --- |
+| unset or `clickup` | ClickUp ticket — today's behaviour |
+| `productive`       | Productive task |
+| `none`             | no ticket; the PR is still created |
+| anything else      | warning logged, ticketing skipped; the PR is still created |
+
+Migration is therefore per project and reversible: flip the env var back and the next run
+uses ClickUp again.
+
+**Setup.** Exactly like ClickUp: the API token is a CircleCI secret, everything else travels
+in `sec-update-data` so it can be set per-trigger.
+
+1. **Token** — add a CircleCI project env var `PRODUCTIVE_TOKEN`
+   (`Project Settings -> Environment Variables`). Kept out of `sec-update-data` because
+   pipeline parameters are readable via the CircleCI API/UI.
+2. **`TICKETING_SYSTEM`** — set it to `productive`.
+3. **`sec-update-data`** — the external trigger POST that sets `run-sec-updates-check` also
+   sends `sec-update-data`. Productive reads these keys from it:
+
+   | key                  | required | value                                                    |
+   | -------------------- | -------- | -------------------------------------------------------- |
+   | `organization_id`    | yes      | Your Productive organization id, sent as `X-Organization-Id` |
+   | `project_id`         | yes      | The project (workspace) the task is created in           |
+   | `task_list_id`       | no       | Task list / milestone to file the task under             |
+   | `board_id`           | no       | Board (folder) to file the task under                    |
+   | `assignee_id`        | no       | Person id to assign                                      |
+   | `workflow_status_id` | no       | Workflow status to open the task in                      |
+   | `task_url_template`  | no       | Override the link built for the PR body (see below)      |
+
+   Example: `{"organization_id":"31","project_id":"123456","task_list_id":"789"}`
+
+   Optional relationships are omitted from the request entirely when unset — Productive
+   rejects a relationship sent as null.
+
+#### Finding the ids (with `PRODUCTIVE_TOKEN` set)
+
+`organization_id` is the number directly after `app.productive.io` in your browser's
+address bar. For the rest:
+
+```bash
+AUTH=(-H "X-Auth-Token: $PRODUCTIVE_TOKEN" -H "X-Organization-Id: <organization_id>")
+
+# project_id
+curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/projects" \
+  | jq '.data[] | {id, name: .attributes.name}'
+
+# task_list_id (scoped to the project)
+curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/task_lists?filter[project_id]=<project_id>" \
+  | jq '.data[] | {id, name: .attributes.name}'
+
+# assignee_id
+curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/people" \
+  | jq '.data[] | {id, name: .attributes.name}'
+```
+
+#### A caveat on the ticket link
+
+Productive's API returns the created task's `id`, but not a web URL for it, and the
+permalink shape is not part of the documented API. POTS therefore builds the link from a
+template, defaulting to `https://app.productive.io/{org}/task/{id}`. If your Productive
+tasks live at a different path, set `task_url_template` in `sec-update-data` — `{org}` and
+`{id}` are substituted. Only the link in the PR body is affected; the task itself is
+created either way.
 
 ### Steps to set the AI key (optional)
 

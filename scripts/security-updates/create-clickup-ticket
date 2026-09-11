@@ -7,9 +7,10 @@
 #
 # Inputs:
 #   $1               Comma-separated list of updated projects (for the ticket body).
-#   CU_TOKEN   (env) ClickUp API token. A CircleCI project env var, kept OUT of CLICK_DATA
+#   CU_TOKEN   (env) ClickUp API token. A CircleCI project env var, kept OUT of
+#                    SEC_UPDATE_DATA
 #                    (pipeline parameters are readable via the CircleCI API/UI).
-#   CLICK_DATA (env) JSON blob of the non-secret ClickUp settings. Keys:
+#   SEC_UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
 #                    list_id, client_id, assignee_id (optional), status (optional).
 #   SITE_NAME  (env) Site name, used in the ticket title/body.
 #
@@ -30,14 +31,14 @@ CU_FIELD_CLIENT="b8bbcb75-a7c8-4eb7-9202-e56d227eefbf"    # "Client" field
 
 log() { echo "$@" >&2; }
 
-# Unpack the non-secret ClickUp settings from the CLICK_DATA pipeline parameter (JSON).
+# Unpack the ClickUp settings from the SEC_UPDATE_DATA pipeline parameter (JSON).
 # Only unpack when it holds valid, non-empty JSON; otherwise the CU_* vars stay empty and
 # the gate below skips ticket creation.
-if [ -n "${CLICK_DATA:-}" ] && [ "${CLICK_DATA}" != "{}" ] && echo "$CLICK_DATA" | jq empty >/dev/null 2>&1; then
-  CU_LIST_ID=$(jq -r '.list_id // empty'        <<<"$CLICK_DATA")
-  CU_CLIENT_ID=$(jq -r '.client_id // empty'    <<<"$CLICK_DATA")
-  CU_ASSIGNEE_ID=$(jq -r '.assignee_id // empty' <<<"$CLICK_DATA")
-  CU_STATUS=$(jq -r '.status // empty'          <<<"$CLICK_DATA")
+if [ -n "${SEC_UPDATE_DATA:-}" ] && [ "${SEC_UPDATE_DATA}" != "{}" ] && echo "$SEC_UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+  CU_LIST_ID=$(jq -r '.list_id // empty'        <<<"$SEC_UPDATE_DATA")
+  CU_CLIENT_ID=$(jq -r '.client_id // empty'    <<<"$SEC_UPDATE_DATA")
+  CU_ASSIGNEE_ID=$(jq -r '.assignee_id // empty' <<<"$SEC_UPDATE_DATA")
+  CU_STATUS=$(jq -r '.status // empty'          <<<"$SEC_UPDATE_DATA")
 fi
 
 # Gate: need the token (env) + list + client. Skip cleanly otherwise.

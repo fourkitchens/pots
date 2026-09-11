@@ -18,14 +18,19 @@ parameters:
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
-  click-data:
+  sec-update-data:
     description: >
-      JSON blob of ClickUp settings for the AutoSec ticket, set by the same external
-      POST that triggers run-sec-updates-check. Unpacked by the automatic-update script.
-      Keys: list_id, client_id, assignee_id (optional), status (optional).
-      The ClickUp API token is NOT here — it is a CircleCI project env var (CU_TOKEN),
-      since pipeline parameters are readable via the CircleCI API/UI. Defaults to "{}"
-      (ticketing disabled).
+      JSON blob of the non-secret ticketing settings for the AutoSec ticket, set by the
+      same external POST that triggers run-sec-updates-check. Which keys matter depends on
+      TICKETING_SYSTEM (a CircleCI env var: clickup, productive, or none).
+        clickup:    list_id, client_id, status (optional)
+        productive: organization_id, project_id, task_list_id (optional),
+                    board_id (optional), workflow_status_id (optional),
+                    task_url_template (optional)
+        both:       assignee_id (optional)
+      The API token is NOT here - it is a CircleCI project env var (CU_TOKEN or
+      PRODUCTIVE_TOKEN), since pipeline parameters are readable via the CircleCI API/UI.
+      Defaults to "{}" (ticketing disabled).
     type: string
     default: "{}"
   run-playwright-e2e-tests:
@@ -106,11 +111,26 @@ env: &env
   #
   # GITHUB_TOKEN: 12345678790abcdef
 
-  # ClickUp API token for the AutoSec ticket (kept out of the click-data pipeline
+  # ClickUp API token for the AutoSec ticket (kept out of the sec-update-data pipeline
   # parameter because parameters are readable via the CircleCI API/UI). The rest of the
-  # ClickUp settings travel in the click-data parameter.
+  # ClickUp settings travel in the sec-update-data parameter.
   #
   # CU_TOKEN: pk_12345678_ABCDEF...
+
+  # Productive.io API token for the AutoSec ticket (kept out of the sec-update-data
+  # pipeline parameter because parameters are readable via the CircleCI API/UI). The rest
+  # of the Productive settings travel in the sec-update-data parameter.
+  #
+  # PRODUCTIVE_TOKEN: 12345678-abcd-...
+
+  # Which ticketing system AutoSec opens a ticket in. Set it per project in the CircleCI
+  # UI, so migrating a project from ClickUp to Productive is a one-click change and its
+  # trigger POST never has to be touched.
+  #
+  # Possible values: clickup, productive, none
+  # Default: clickup
+  #
+  # TICKETING_SYSTEM: productive
 
   # Optional: OpenAI model used for AutoSec's AI testing-step generation.
   # Defaults to gpt-4o-mini when unset.
@@ -450,8 +470,9 @@ jobs:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
-      # ClickUp settings for the AutoSec ticket, unpacked by the automatic-update script.
-      CLICK_DATA: << pipeline.parameters.click-data >>
+      # Ticketing settings for the AutoSec ticket, unpacked by the provider script
+      # selected by TICKETING_SYSTEM.
+      SEC_UPDATE_DATA: << pipeline.parameters.sec-update-data >>
     steps:
       - run:
           name: Upgrade composer
