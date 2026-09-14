@@ -58,6 +58,7 @@ Whatever you want it to stand for.  Here's some options:
 * [Configure Scripts](#configure-scripts)
    + [Pantheon Specific Scripts](#pantheon-specific-scripts)
 * [Automatic Security Updates](#automatic-security-updates)
+* [Automated minor composer updates](#automated-minor-composer-updates)
    + [Steps to set the keys](#steps-to-set-the-keys)
    + [Steps to set the ClickUp integration (optional)](#steps-to-set-the-clickup-integration-optional)
    + [Steps to set the Productive.io integration (optional)](#steps-to-set-the-productiveio-integration-optional)
@@ -89,10 +90,41 @@ uses Terminus, exactly as shipped in the current `config.yml`. Terminus is now i
 at runtime and pinned via the new `terminus-version` and `terminus-build-tools-version`
 parameters — set those if you need versions other than the defaults.
 
-### BREAKING: `click-data` is now `sec-update-data`
+### BREAKING: the update scripts moved and were renamed
+
+This release turns AutoSec into two flows (security, and routine minor composer updates)
+that share one job and one directory. Three things move. Do them in one pass.
+
+**1. The scripts directory.** `scripts/security-updates/` is now `scripts/updates/`, and the
+entry script `automatic-update` is now `run-update`, which takes a mode. If your project has
+overrides, move them:
+
+```bash
+git mv .circleci/scripts/security-updates .circleci/scripts/updates
+# if you overrode the entry script:
+git mv .circleci/scripts/updates/automatic-update .circleci/scripts/updates/run-update
+# templates are now per-mode:
+#   PULL_REQUEST_TEMPLATE.md -> PULL_REQUEST_TEMPLATE-security.md
+#   TICKET_TEMPLATE.md       -> TICKET_TEMPLATE-security.md
+```
+
+**2. The environment variables**, which are shared by both flows and so lost their `SEC_`
+prefix. Rename any you have set in CircleCI:
+
+| old | new |
+| --- | --- |
+| `SEC_UPDATE_RUN_DB_UPDATES` | `UPDATE_RUN_DB_UPDATES` |
+| `SEC_UPDATE_DB_ENV` | `UPDATE_DB_ENV` |
+| `SEC_UPDATE_DB_DUMP` | `UPDATE_DB_DUMP` |
+| `SEC_UPDATE_CREATE_BACKUP` | `UPDATE_CREATE_BACKUP` |
+| `SEC_UPDATE_BASELINE_COMMIT` | `UPDATE_BASELINE_COMMIT` |
+
+**3. The trigger parameter** — see immediately below.
+
+### BREAKING: `click-data` is now `update-data`
 
 AutoSec's ticketing configuration used one pipeline parameter per provider. That is now a
-single `sec-update-data` blob, with the provider chosen by a `TICKETING_SYSTEM` env var.
+single `update-data` blob, with the provider chosen by a `TICKETING_SYSTEM` env var.
 **`click-data` no longer exists.**
 
 This one needs care, because CircleCI **fails any pipeline that receives a parameter the
@@ -114,7 +146,7 @@ Rename the parameter in your Evercurrent (or CircleCI triggers UI) POST body:
    "parameters": {
      "run-sec-updates-check": true,
 -    "click-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
-+    "sec-update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
++    "update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
    }
  }
 ```
@@ -166,7 +198,7 @@ Then check the requirements in
 [Database updates and configuration export](#database-updates-and-configuration-export) —
 in particular that `drush/drush` is in `require` and that your `settings.php` includes
 `settings.local.php`. If you would rather keep AutoSec's previous composer-only behaviour,
-merge the diff anyway and set `SEC_UPDATE_RUN_DB_UPDATES=NO`.
+merge the diff anyway and set `UPDATE_RUN_DB_UPDATES=NO`.
 
 ## Dependencies
 
@@ -412,7 +444,7 @@ the instructions from Acquia to [Add a public key to an Acquia profile](https://
 14. Click "Add Environment Variable".
 15. Type "CU_TOKEN" in the name.
 16. Paste your ClickUp API token into "Value" (stored in 1Password). This is the only
-    ClickUp secret; the rest of the settings travel in the `sec-update-data` pipeline
+    ClickUp secret; the rest of the settings travel in the `update-data` pipeline
     parameter — see [Automatic Security Updates](#automatic-security-updates) below.
 17. Click "Add Environment Variable" to accept the changes.
 
@@ -450,7 +482,14 @@ or the CircleCI triggers UI) POSTs it as `true` to start a security-update run. 
 `true` the normal build/deploy workflow is skipped and only `security_updates_check` runs,
 and only on `main`/`master`.
 
-#### sec-update-data
+#### run-composer-updates-check
+This boolean triggers the routine composer-update process — **minor and patch updates only,
+never a major**. Like `run-sec-updates-check` it defaults to `false` and is meant to be POSTed
+by an external scheduler. If both flags are set on one pipeline the security run wins, so two
+update branches can never race. See
+[Automated minor composer updates](#automated-minor-composer-updates).
+
+#### update-data
 A JSON blob of the non-secret ticketing settings for the AutoSec ticket, sent by the same
 external POST that sets `run-sec-updates-check`. Defaults to `"{}"`, which disables
 ticketing.
@@ -740,6 +779,13 @@ All optional — every one of these has a working default. See
    unset, AutoSec still updates packages and opens the PR, just without a ticket.
 * `PRODUCTIVE_TOKEN`: Productive.io API token, the equivalent of `CU_TOKEN`. Unset means
    no Productive ticket, and nothing else changes.
+* `UPDATE_LEVEL`: How far the routine composer update is allowed to go — `minor` (the
+   default: minor and patch releases) or `patch` (patch releases only). There is
+   deliberately no `major`: a major version is breaking by definition and is never applied
+   automatically.
+* `UPDATE_EXCLUDE`: Space-separated globs of packages to hold back from the routine update,
+   e.g. `"drupal/core-* symfony/*"`. Lets a project skip a package without editing its
+   version constraints.
 * `TICKETING_SYSTEM`: Which ticketing system AutoSec opens a ticket in. One of `clickup`
    (the default when unset), `productive`, or `none`. It is an env var rather than a
    pipeline parameter on purpose: migrating a project from ClickUp to Productive is then a
@@ -751,15 +797,15 @@ All optional — every one of these has a working default. See
    `https://api.openai.com/v1`. Point it at any compatible provider, including free ones.
 * `OPENAI_MODEL`: Model id. Defaults to `gpt-4o-mini`.
 * `OPENAI_TIMEOUT`: Per-request timeout in seconds. Defaults to `45`.
-* `SEC_UPDATE_RUN_DB_UPDATES`: Set to `NO` to skip the database updates and configuration
+* `UPDATE_RUN_DB_UPDATES`: Set to `NO` to skip the database updates and configuration
    export, leaving AutoSec with its composer-only behaviour. Defaults to `YES`.
-* `SEC_UPDATE_DB_ENV`: Environment to pull the AutoSec database from. Defaults to
+* `UPDATE_DB_ENV`: Environment to pull the AutoSec database from. Defaults to
    `CANONICAL_ENV`, else `live`.
-* `SEC_UPDATE_CREATE_BACKUP`: Set to `YES` to create a fresh Pantheon backup before
+* `UPDATE_CREATE_BACKUP`: Set to `YES` to create a fresh Pantheon backup before
    downloading instead of using the most recent one. Defaults to `NO`.
-* `SEC_UPDATE_DB_DUMP`: Path to a local gzipped dump. When set, Terminus is skipped and
+* `UPDATE_DB_DUMP`: Path to a local gzipped dump. When set, Terminus is skipped and
    this file is imported instead. Intended for running the AutoSec scripts by hand.
-* `SEC_UPDATE_BASELINE_COMMIT`: What to do when a plain configuration export of the
+* `UPDATE_BASELINE_COMMIT`: What to do when a plain configuration export of the
    *unmodified* site already differs from `./config`. `YES` (default) commits that
    pre-existing drift as its own commit so the per-package commits stay attributable; `NO`
    discards it; `ABORT` skips the configuration export altogether.
@@ -906,19 +952,19 @@ With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, b
 
 When configured, AutoSec creates a ClickUp task for each security-update PR and links the
 task URL in the PR body. Ticketing is handled by
-`scripts/security-updates/create-clickup-ticket` and is entirely optional — if it is not
+`scripts/updates/create-clickup-ticket` and is entirely optional — if it is not
 configured, AutoSec still updates packages and opens the PR, just without a ticket.
 
 ClickUp is the default, so there is nothing to select. The API token is a CircleCI secret;
-the rest of the settings travel in the `sec-update-data` pipeline parameter (a JSON blob)
+the rest of the settings travel in the `update-data` pipeline parameter (a JSON blob)
 so they can be set per-trigger without touching config:
 
 1. **Token** — add a CircleCI project env var `CU_TOKEN` with your ClickUp API token
-   (`Project Settings -> Environment Variables`). Kept out of `sec-update-data` because
+   (`Project Settings -> Environment Variables`). Kept out of `update-data` because
    pipeline parameters are readable via the CircleCI API/UI.
 2. **`TICKETING_SYSTEM`** — leave it unset, or set it to `clickup` to be explicit.
-3. **`sec-update-data`** — the external trigger POST that sets `run-sec-updates-check` also
-   sends `sec-update-data`, a JSON object with these keys:
+3. **`update-data`** — the external trigger POST that sets `run-sec-updates-check` also
+   sends `update-data`, a JSON object with these keys:
 
    | key           | required | value                                                            |
    | ------------- | -------- | ---------------------------------------------------------------- |
@@ -959,7 +1005,7 @@ a configuration change rather than a code change.
 
 **Migrating a project** is one value: set the `TICKETING_SYSTEM` env var to `productive` in
 `Project Settings -> Environment Variables`. The trigger POST does not change — only the
-contents of `sec-update-data` do, since the two systems read different keys out of it.
+contents of `update-data` do, since the two systems read different keys out of it.
 
 | `TICKETING_SYSTEM` | Result |
 | --- | --- |
@@ -972,14 +1018,14 @@ Migration is therefore per project and reversible: flip the env var back and the
 uses ClickUp again.
 
 **Setup.** Exactly like ClickUp: the API token is a CircleCI secret, everything else travels
-in `sec-update-data` so it can be set per-trigger.
+in `update-data` so it can be set per-trigger.
 
 1. **Token** — add a CircleCI project env var `PRODUCTIVE_TOKEN`
-   (`Project Settings -> Environment Variables`). Kept out of `sec-update-data` because
+   (`Project Settings -> Environment Variables`). Kept out of `update-data` because
    pipeline parameters are readable via the CircleCI API/UI.
 2. **`TICKETING_SYSTEM`** — set it to `productive`.
-3. **`sec-update-data`** — the external trigger POST that sets `run-sec-updates-check` also
-   sends `sec-update-data`. Productive reads these keys from it:
+3. **`update-data`** — the external trigger POST that sets `run-sec-updates-check` also
+   sends `update-data`. Productive reads these keys from it:
 
    | key                  | required | value                                                    |
    | -------------------- | -------- | -------------------------------------------------------- |
@@ -1022,7 +1068,7 @@ curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/people" \
 Productive's API returns the created task's `id`, but not a web URL for it, and the
 permalink shape is not part of the documented API. POTS therefore builds the link from a
 template, defaulting to `https://app.productive.io/{org}/task/{id}`. If your Productive
-tasks live at a different path, set `task_url_template` in `sec-update-data` — `{org}` and
+tasks live at a different path, set `task_url_template` in `update-data` — `{org}` and
 `{id}` are substituted. Only the link in the PR body is affected; the task itself is
 created either way.
 
@@ -1030,7 +1076,7 @@ created either way.
 
 AutoSec can use AI to generate functional testing steps for the packages it updates automatically. These steps are added to the PR body, giving the developer performing the tests useful guidance.
 
-The integration is **entirely optional and cannot break a run**. `automatic-update` checks
+The integration is **entirely optional and cannot break a run**. `run-update` checks
 whether `OPENAI_API_KEY` is set and skips the request when it isn't, and every failure mode
 — no key, wrong key, unreachable endpoint, rate limit, timeout — is non-fatal: the request
 is abandoned, the reason is logged, and the security PR is created without the AI section.
@@ -1076,11 +1122,11 @@ hand, on somebody's local.
 So `security_updates_check` stands up a real, throwaway Drupal site inside the job: it
 restores your canonical database into a `cimg/mariadb` sidecar, runs the database updates
 each package brings with it, exports the configuration, and commits the result to the same
-AutoSec branch. This is on by default; set `SEC_UPDATE_RUN_DB_UPDATES=NO` to turn it off.
+AutoSec branch. This is on by default; set `UPDATE_RUN_DB_UPDATES=NO` to turn it off.
 
 #### What the job actually does
 
-1. `scripts/security-updates/setup-drupal-env` runs **once**, and only after AutoSec has
+1. `scripts/updates/setup-drupal-env` runs **once**, and only after AutoSec has
    confirmed there is something to update — a run with no advisories never pays for a
    database restore.
    1. Resolves drush at `./vendor/bin/drush` and refuses to continue if it isn't there.
@@ -1093,7 +1139,7 @@ AutoSec branch. This is on by default; set `SEC_UPDATE_RUN_DB_UPDATES=NO` to tur
    6. `drush updatedb` to drain updates already pending on the canonical environment, then
       `drush config:import` so the active configuration matches what is in git, then a
       baseline `drush config:export`.
-2. Then, for **each** updated package, `scripts/security-updates/apply-db-updates` runs
+2. Then, for **each** updated package, `scripts/updates/apply-db-updates` runs
    `drush updatedb`, `drush config:export`, and commits any changed configuration as
    `(AUTO-SEC): Exported configuration for <package>`.
 
@@ -1111,7 +1157,7 @@ actually changed.
 
 If the site's configuration is already drifted in a way a plain export reveals, that shows
 up as a separate `(AUTO-SEC): Baseline config export before security updates` commit, kept
-apart from the per-package commits. `SEC_UPDATE_BASELINE_COMMIT` controls this.
+apart from the per-package commits. `UPDATE_BASELINE_COMMIT` controls this.
 
 #### Requirements
 
@@ -1149,27 +1195,105 @@ failing for a package.
 #### Running it by hand
 
 Both scripts work outside CI, which is the quickest way to check a project is ready.
-`SEC_UPDATE_DB_DUMP` skips Terminus and imports a local dump instead:
+`UPDATE_DB_DUMP` skips Terminus and imports a local dump instead:
 
 ```bash
 docker run -d --name autosec-db --network autosec cimg/mariadb:10.11
 docker run --rm --network autosec -v "$PWD:/work" -w /work \
-  -e DOCROOT=web -e AUTOSEC_DB_HOST=autosec-db \
-  -e SEC_UPDATE_DB_DUMP=/work/db/site-db.sql.gz \
+  -e DOCROOT=web -e UPDATE_DB_HOST=autosec-db \
+  -e UPDATE_DB_DUMP=/work/db/site-db.sql.gz \
   cimg/php:8.4 bash -c '
     sudo apt-get update && sudo apt-get install -y mariadb-client
-    ./vendor/fourkitchens/pots/scripts/security-updates/setup-drupal-env'
+    ./vendor/fourkitchens/pots/scripts/updates/setup-drupal-env'
 ```
 
-`AUTOSEC_DB_HOST`, `AUTOSEC_DB_PORT`, `AUTOSEC_DB_NAME`, `AUTOSEC_DB_USER` and
-`AUTOSEC_DB_PASS` override the connection; the defaults match the CI sidecar.
+`UPDATE_DB_HOST`, `UPDATE_DB_PORT`, `UPDATE_DB_NAME`, `UPDATE_DB_USER` and
+`UPDATE_DB_PASS` override the connection; the defaults match the CI sidecar.
 
 #### Overriding
 
 Both scripts follow the usual POTS override pattern — drop your own at
-`.circleci/scripts/security-updates/setup-drupal-env` or
-`.circleci/scripts/security-updates/apply-db-updates`. `setup-drupal-env` must leave
-`DRUSH`, `DRUPAL_ROOT` and `CONFIG_SYNC_DIR` in `$AUTOSEC_STATE_DIR/env` for
-`apply-db-updates` to source, and signal failure by creating `$AUTOSEC_STATE_DIR/disabled`.
+`.circleci/scripts/updates/setup-drupal-env` or
+`.circleci/scripts/updates/apply-db-updates`. `setup-drupal-env` must leave
+`DRUSH`, `DRUPAL_ROOT` and `CONFIG_SYNC_DIR` in `$UPDATE_STATE_DIR/env` for
+`apply-db-updates` to source, and signal failure by creating `$UPDATE_STATE_DIR/disabled`.
 `apply-db-updates` must print its Markdown summary on stdout, log to stderr, and always
 exit 0.
+
+
+## Automated minor composer updates
+
+The second of the two automated update flows. Where AutoSec reacts to security advisories,
+this one is routine maintenance: it applies the **minor and patch** releases available for
+Drupal core and the project's other dependencies, runs the database updates they bring with
+them, exports the resulting configuration, and opens a PR — every step AutoSec performs, with
+one difference: which packages get picked.
+
+Trigger it with its own POST, exactly like AutoSec:
+
+```json
+{
+  "parameters": {
+    "run-composer-updates-check": true,
+    "update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
+  }
+}
+```
+
+Both flows share one job and one set of scripts; `scripts/updates/run-update <mode>` is the
+entry point, where mode is `security` or `composer`.
+
+### Minor only — and what that actually means
+
+**A major version is never applied automatically.** Majors are breaking by definition and need
+a person to plan and test them. That restriction is enforced by Composer's own semver logic
+rather than by parsing version numbers, and it takes two conditions, both necessary:
+
+| condition | what it rules out |
+| --- | --- |
+| `composer outdated --direct --minor-only` | targets the newest release **within the same major** |
+| `latest-status == "semver-safe-update"` | anything the project's own constraints forbid |
+
+Neither is sufficient alone. `--minor-only` on its own would still list a package the project
+pins (a `10.2.*` constraint shows a 10.6 candidate but reports `update-possible`), and
+`latest-status` on its own would let a major through on a constraint like `^1.0 || ^2.0`.
+Because `--minor-only` includes patch releases, "minor" here means minor **and** patch.
+
+Worth knowing, because it is easy to assume the opposite: this usually *does* update core.
+On a site whose constraint is `~10.1` and which sits on 10.2.6, the run moves core to the
+newest 10.x — not to 11.x. Majors that exist but were skipped are listed in the PR under
+"Major upgrades available but not applied", so a waiting major upgrade is visible rather than
+silently dropped.
+
+`UPDATE_LEVEL=patch` narrows it further. `UPDATE_EXCLUDE` holds specific packages back.
+
+### Why packages are updated one at a time
+
+The run updates each package with its own `composer update <package> --with-dependencies`
+rather than a single bulk `composer update`. Two reasons:
+
+1. **Attribution.** Each package gets its own composer commit and, where it changed
+   configuration, its own config commit — so a reviewer can see which module caused which
+   change.
+2. **A full `composer update` can fail outright for unrelated reasons.** It re-resolves the
+   whole dependency graph, so one advisory-blocked pin elsewhere in `composer.json` is enough
+   to abort the entire run:
+   ```
+   Problem 1
+     - Root composer.json requires drupal/foo 2.1.0 ... not loaded, because they are
+       affected by security advisories ("SA-CONTRIB-2024-024")
+   ```
+   A per-package update is a *partial* update and does not re-resolve everything, so it
+   sidesteps this. A package that cannot move (an exact pin, a conflict) is logged and
+   skipped; the rest of the run continues.
+
+### Choosing the packages yourself
+
+Selection is a separate, overridable script, so a project can change the policy without
+touching the orchestrator:
+
+* `scripts/updates/select-packages-composer` — `composer outdated`, filtered as above
+* `scripts/updates/select-packages-security` — `composer audit`, filtered to `drupal/*`
+
+Both print one package name per line on stdout, log to stderr, and always exit 0. Drop your
+own at `.circleci/scripts/updates/select-packages-<mode>` to override.

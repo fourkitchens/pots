@@ -18,7 +18,14 @@ parameters:
     default: false
     # The value for this variable will be set using a External POST request
     # To trigger the Automatic security updates check.
-  sec-update-data:
+  run-composer-updates-check:
+    description: >
+      Use to trigger the routine composer-update process: minor and patch updates only,
+      never a major. Set by an external POST, exactly like run-sec-updates-check. If both
+      are set, the security run wins.
+    type: boolean
+    default: false
+  update-data:
     description: >
       JSON blob of the non-secret ticketing settings for the AutoSec ticket, set by the
       same external POST that triggers run-sec-updates-check. Which keys matter depends on
@@ -111,15 +118,15 @@ env: &env
   #
   # GITHUB_TOKEN: 12345678790abcdef
 
-  # ClickUp API token for the AutoSec ticket (kept out of the sec-update-data pipeline
+  # ClickUp API token for the AutoSec ticket (kept out of the update-data pipeline
   # parameter because parameters are readable via the CircleCI API/UI). The rest of the
-  # ClickUp settings travel in the sec-update-data parameter.
+  # ClickUp settings travel in the update-data parameter.
   #
   # CU_TOKEN: pk_12345678_ABCDEF...
 
-  # Productive.io API token for the AutoSec ticket (kept out of the sec-update-data
+  # Productive.io API token for the AutoSec ticket (kept out of the update-data
   # pipeline parameter because parameters are readable via the CircleCI API/UI). The rest
-  # of the Productive settings travel in the sec-update-data parameter.
+  # of the Productive settings travel in the update-data parameter.
   #
   # PRODUCTIVE_TOKEN: 12345678-abcd-...
 
@@ -158,24 +165,24 @@ env: &env
   #
   # Default: YES
   #
-  # SEC_UPDATE_RUN_DB_UPDATES: NO
+  # UPDATE_RUN_DB_UPDATES: NO
 
   # Environment to pull the AutoSec database from.
   #
   # Default: $CANONICAL_ENV, else "live"
   #
-  # SEC_UPDATE_DB_ENV: dev
+  # UPDATE_DB_ENV: dev
 
   # Create a fresh Pantheon backup before downloading, instead of using the latest one.
   #
   # Default: NO
   #
-  # SEC_UPDATE_CREATE_BACKUP: YES
+  # UPDATE_CREATE_BACKUP: YES
 
   # Path to a local gzipped dump. When set, Terminus is skipped and this file is imported
   # instead. Intended for running the AutoSec scripts by hand outside CI.
   #
-  # SEC_UPDATE_DB_DUMP: /tmp/site-db.sql.gz
+  # UPDATE_DB_DUMP: /tmp/site-db.sql.gz
 
   # What to do when a plain configuration export of the unmodified site already differs
   # from ./config (pre-existing drift). YES commits it as its own "Baseline config export"
@@ -184,7 +191,7 @@ env: &env
   #
   # Default: YES
   #
-  # SEC_UPDATE_BASELINE_COMMIT: ABORT
+  # UPDATE_BASELINE_COMMIT: ABORT
 
   # Settings file AutoSec writes the CI database credentials into, relative to the project
   # root. It must be a file the project's settings.php already includes.
@@ -456,7 +463,11 @@ jobs:
           environment: 'live'
 
 
-  security_updates_check:
+  update_check:
+    parameters:
+      mode:
+        description: Which selector decides what to update - security or composer.
+        type: string
     <<: *defaults
     # Restoring and updating a real database needs more than the small class &defaults sets.
     resource_class: medium
@@ -472,7 +483,7 @@ jobs:
       TERM: dumb
       # Ticketing settings for the AutoSec ticket, unpacked by the provider script
       # selected by TICKETING_SYSTEM.
-      SEC_UPDATE_DATA: << pipeline.parameters.sec-update-data >>
+      UPDATE_DATA: << pipeline.parameters.update-data >>
     steps:
       - run:
           name: Upgrade composer
@@ -496,9 +507,8 @@ jobs:
       - run:
           name: Install the MariaDB client
           command: sudo apt-get update && sudo apt-get install -y mariadb-client
-      - run: composer audit --format=json > /tmp/projects_to_update.json 2>/dev/null || true
       - run:
-          name: Check security updates
+          name: Run << parameters.mode >> updates
           # Downloading and importing a production database, then running the database
           # updates, can easily outrun the default 10 minute silence timeout.
           no_output_timeout: 30m
@@ -506,10 +516,10 @@ jobs:
               git config --global user.email "bender@fourkitchens.com"
               git config --global user.name "CI Bot"
               echo "Starting script"
-              if [ -f "./.circleci/scripts/security-updates/automatic-update" ]; then
-                cat /tmp/projects_to_update.json | ./.circleci/scripts/security-updates/automatic-update
+              if [ -f "./.circleci/scripts/updates/run-update" ]; then
+                ./.circleci/scripts/updates/run-update << parameters.mode >>
               else
-                cat /tmp/projects_to_update.json | ./vendor/fourkitchens/pots/scripts/security-updates/automatic-update
+                ./vendor/fourkitchens/pots/scripts/updates/run-update << parameters.mode >>
               fi
               echo "Script done"
 
@@ -632,7 +642,27 @@ workflows:
   scheduled_update_check:
     when: << pipeline.parameters.run-sec-updates-check >>
     jobs:
-      - security_updates_check:
+      - update_check:
+          name: security_updates_check
+          mode: security
+          filters:
+            branches:
+              only:
+                - 'main'
+                - 'master'
+
+  # Routine maintenance: minor and patch updates only. Triggered by its own POST.
+  scheduled_composer_update:
+    when:
+      and:
+        - << pipeline.parameters.run-composer-updates-check >>
+        # If a caller sets both flags, the security run wins. Two update pipelines would
+        # otherwise race to push a branch and open a PR.
+        - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
+    jobs:
+      - update_check:
+          name: composer_updates_check
+          mode: composer
           filters:
             branches:
               only:
@@ -644,6 +674,7 @@ workflows:
       and:
       - equal: [ pantheon, << pipeline.parameters.host-variant >> ]
       - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
+      - equal: [ false, << pipeline.parameters.run-composer-updates-check >> ]
       # Don't run the full build/deploy for VRT-only pipelines (triggered via the
       # GitHub Actions label workflow, which sets vrt-mode). Normal push/PR
       # pipelines use the default "none" and run as usual.
@@ -761,8 +792,13 @@ workflows:
 
   build-deploy-acquia:
     when:
-      not:
-        equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+      and:
+        - not:
+            equal: [ pantheon, << pipeline.parameters.host-variant >> ]
+        # Without these an update trigger on main would build and deploy this project at the
+        # same time as the update job is rewriting composer.json and pushing a branch.
+        - equal: [ false, << pipeline.parameters.run-sec-updates-check >> ]
+        - equal: [ false, << pipeline.parameters.run-composer-updates-check >> ]
     jobs:
       - static_tests
       - build

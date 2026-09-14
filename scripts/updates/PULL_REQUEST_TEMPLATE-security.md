@@ -7,6 +7,9 @@
 ### Database updates and configuration changes:
 [CONFIG_CHANGES]
 
+### Major upgrades available but not applied:
+[BLOCKED_UPDATES]
+
 ### Pull Request Environment:
 https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/
 

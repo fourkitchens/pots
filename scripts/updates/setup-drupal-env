@@ -3,7 +3,7 @@
 # Stand up a working Drupal site inside the CI container so that AutoSec can run
 # `drush updatedb` and export the configuration changes a security update brings with it.
 #
-# Called once by scripts/security-updates/automatic-update, *after* it has confirmed there
+# Called once by scripts/updates/run-update, *after* it has confirmed there
 # are security updates to apply (so a no-op AutoSec run never pays for a database restore)
 # and after the update branch has been created. Also runnable standalone for testing.
 #
@@ -16,34 +16,34 @@
 #   DOCROOT                     Drupal docroot, relative to the project root. Default: web
 #   CI_SETTINGS_FILE            Settings file to write, relative to the project root.
 #                               Default: $DOCROOT/sites/default/settings.local.php
-#   SEC_UPDATE_DB_ENV           Pantheon environment to pull the database from.
+#   UPDATE_DB_ENV           Pantheon environment to pull the database from.
 #                               Default: $CANONICAL_ENV, else "live"
-#   SEC_UPDATE_DB_DUMP          Path to a local gzipped dump. When set, Terminus is skipped
+#   UPDATE_DB_DUMP          Path to a local gzipped dump. When set, Terminus is skipped
 #                               entirely and this file is imported instead. Use it to run
 #                               this script locally.
-#   SEC_UPDATE_CREATE_BACKUP    YES to create a fresh Pantheon backup before downloading.
+#   UPDATE_CREATE_BACKUP    YES to create a fresh Pantheon backup before downloading.
 #                               Default: NO (use the latest existing backup).
-#   SEC_UPDATE_BASELINE_COMMIT  What to do when the very first config:export is already
+#   UPDATE_BASELINE_COMMIT  What to do when the very first config:export is already
 #                               dirty (pre-existing drift): YES commit it separately (the
 #                               default), NO discard it, ABORT disable the phase.
 #   SANITIZE_SCRIPT             Optional script run against the restored database.
-#   TERMINUS_TOKEN / TERMINUS_SITE   Required unless SEC_UPDATE_DB_DUMP is set.
-#   AUTOSEC_DB_{HOST,PORT,NAME,USER,PASS}  Override the CI database connection. The
+#   TERMINUS_TOKEN / TERMINUS_SITE   Required unless UPDATE_DB_DUMP is set.
+#   UPDATE_DB_{HOST,PORT,NAME,USER,PASS}  Override the CI database connection. The
 #                               defaults match the cimg/mariadb sidecar.
-#   AUTOSEC_STATE_DIR           Where to leave state for apply-db-updates. Default: /tmp/autosec
+#   UPDATE_STATE_DIR           Where to leave state for apply-db-updates. Default: /tmp/pots-update
 #
 # Output:
-#   $AUTOSEC_STATE_DIR/env       sourceable DRUSH / DRUPAL_ROOT / CONFIG_SYNC_DIR
-#   $AUTOSEC_STATE_DIR/disabled  present when the database phase must not run
-#   $AUTOSEC_STATE_DIR/notes     human-readable warnings, surfaced in the PR body
+#   $UPDATE_STATE_DIR/env       sourceable DRUSH / DRUPAL_ROOT / CONFIG_SYNC_DIR
+#   $UPDATE_STATE_DIR/disabled  present when the database phase must not run
+#   $UPDATE_STATE_DIR/notes     human-readable warnings, surfaced in the PR body
 #
 # Exits non-zero when the environment could not be prepared, but ALWAYS records the reason
-# in $AUTOSEC_STATE_DIR/disabled first, so the caller can fall back to a composer-only
+# in $UPDATE_STATE_DIR/disabled first, so the caller can fall back to a composer-only
 # security PR rather than failing the whole run.
 
 set -eo pipefail
 
-STATE_DIR="${AUTOSEC_STATE_DIR:-/tmp/autosec}"
+STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
 mkdir -p "$STATE_DIR"
 
 log()  { echo "[autosec:setup] $*" >&2; }
@@ -85,11 +85,11 @@ DRUSH_CMD=( "$DRUSH" --root="$DRUPAL_ROOT" )
 ##
 # 2. Wait for the database sidecar to accept connections.
 ##
-DB_HOST="${AUTOSEC_DB_HOST:-127.0.0.1}"
-DB_PORT="${AUTOSEC_DB_PORT:-3306}"
-DB_NAME="${AUTOSEC_DB_NAME:-circle_test}"
-DB_USER="${AUTOSEC_DB_USER:-root}"
-DB_PASS="${AUTOSEC_DB_PASS:-}"
+DB_HOST="${UPDATE_DB_HOST:-127.0.0.1}"
+DB_PORT="${UPDATE_DB_PORT:-3306}"
+DB_NAME="${UPDATE_DB_NAME:-circle_test}"
+DB_USER="${UPDATE_DB_USER:-root}"
+DB_PASS="${UPDATE_DB_PASS:-}"
 
 MYSQL_ARGS=( -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" )
 if [ -n "$DB_PASS" ]; then
@@ -133,13 +133,13 @@ fi
 
 # Preserve a settings file the project owns, but never stack backups of our own: rerunning
 # this script in the same checkout would otherwise "back up" the file it wrote last time.
-AUTOSEC_MARKER="Written by scripts/security-updates/setup-drupal-env"
+UPDATE_MARKER="Written by scripts/updates/setup-drupal-env"
 if [ -f "$SETTINGS_PATH" ]; then
-  if grep -q "$AUTOSEC_MARKER" "$SETTINGS_PATH" 2>/dev/null; then
+  if grep -q "$UPDATE_MARKER" "$SETTINGS_PATH" 2>/dev/null; then
     log "Replacing the $CI_SETTINGS_FILE written by a previous run."
   else
     log "Backing up the existing $CI_SETTINGS_FILE"
-    mv "$SETTINGS_PATH" "$SETTINGS_PATH.autosec-bak"
+    mv "$SETTINGS_PATH" "$SETTINGS_PATH.pots-update-bak"
   fi
 fi
 
@@ -158,7 +158,7 @@ cat > "$SETTINGS_PATH" <<PHP_EOF
  * @file
  * Settings for the throwaway Drupal site AutoSec builds in CI.
  *
- * Written by scripts/security-updates/setup-drupal-env. Never committed.
+ * Written by scripts/updates/setup-drupal-env. Never committed.
  */
 
 \$databases['default']['default'] = [
@@ -180,16 +180,16 @@ log "Wrote $CI_SETTINGS_FILE"
 ##
 # 4. Restore the database.
 ##
-if [ -n "${SEC_UPDATE_DB_DUMP:-}" ]; then
-  if [ ! -f "$SEC_UPDATE_DB_DUMP" ]; then
-    disable_phase "SEC_UPDATE_DB_DUMP is set to '$SEC_UPDATE_DB_DUMP' but that file does not exist."
+if [ -n "${UPDATE_DB_DUMP:-}" ]; then
+  if [ ! -f "$UPDATE_DB_DUMP" ]; then
+    disable_phase "UPDATE_DB_DUMP is set to '$UPDATE_DB_DUMP' but that file does not exist."
     exit 1
   fi
-  log "Importing the local dump $SEC_UPDATE_DB_DUMP (Terminus skipped)."
-  DUMP_PATH="$SEC_UPDATE_DB_DUMP"
+  log "Importing the local dump $UPDATE_DB_DUMP (Terminus skipped)."
+  DUMP_PATH="$UPDATE_DB_DUMP"
 else
   if [ -z "${TERMINUS_TOKEN:-}" ] || [ -z "${TERMINUS_SITE:-}" ]; then
-    disable_phase "TERMINUS_TOKEN and TERMINUS_SITE are required to download the database. Set them, or point SEC_UPDATE_DB_DUMP at a local dump."
+    disable_phase "TERMINUS_TOKEN and TERMINUS_SITE are required to download the database. Set them, or point UPDATE_DB_DUMP at a local dump."
     exit 1
   fi
 
@@ -201,10 +201,10 @@ else
     log "Using existing terminus session"
   fi
 
-  DB_ENV="${SEC_UPDATE_DB_ENV:-${CANONICAL_ENV:-live}}"
-  DUMP_PATH="/tmp/autosec-db.sql.gz"
+  DB_ENV="${UPDATE_DB_ENV:-${CANONICAL_ENV:-live}}"
+  DUMP_PATH="/tmp/pots-update-db.sql.gz"
 
-  if [[ "${SEC_UPDATE_CREATE_BACKUP:-NO}" == "YES" ]]; then
+  if [[ "${UPDATE_CREATE_BACKUP:-NO}" == "YES" ]]; then
     log "Creating a fresh database backup of $TERMINUS_SITE.$DB_ENV"
     terminus -n backup:create "$TERMINUS_SITE.$DB_ENV" --element=db
   fi
@@ -298,11 +298,11 @@ log "Taking a baseline configuration export."
 "${DRUSH_CMD[@]}" config:export -y
 
 if [ -n "$( git status --porcelain -- "$CONFIG_SYNC_DIR" )" ]; then
-  case "${SEC_UPDATE_BASELINE_COMMIT:-YES}" in
+  case "${UPDATE_BASELINE_COMMIT:-YES}" in
     ABORT)
       git checkout -- "$CONFIG_SYNC_DIR"
       git clean -fdq -- "$CONFIG_SYNC_DIR"
-      disable_phase "The site's configuration export is not stable: a plain export of the unmodified site already differs from ./config. SEC_UPDATE_BASELINE_COMMIT=ABORT, so the configuration export has been skipped."
+      disable_phase "The site's configuration export is not stable: a plain export of the unmodified site already differs from ./config. UPDATE_BASELINE_COMMIT=ABORT, so the configuration export has been skipped."
       exit 1
       ;;
     NO)
@@ -310,12 +310,12 @@ if [ -n "$( git status --porcelain -- "$CONFIG_SYNC_DIR" )" ]; then
       git checkout -- "$CONFIG_SYNC_DIR"
       git clean -fdq -- "$CONFIG_SYNC_DIR"
       note "A plain export of the unmodified site already differed from ./config. That pre-existing drift was discarded, so it may reappear inside the first package's configuration commit."
-      log "Discarded the baseline drift (SEC_UPDATE_BASELINE_COMMIT=NO)."
+      log "Discarded the baseline drift (UPDATE_BASELINE_COMMIT=NO)."
       ;;
     *)
       git add -- "$CONFIG_SYNC_DIR"
-      git commit -m "(AUTO-SEC): Baseline config export before security updates" >&2
-      note "A plain export of the unmodified site already differed from ./config. That pre-existing drift was committed separately as \"Baseline config export before security updates\" so the per-package configuration commits stay attributable."
+      git commit -m "${COMMIT_PREFIX:-(AUTO-SEC)}: Baseline config export before updates" >&2
+      note "A plain export of the unmodified site already differed from ./config. That pre-existing drift was committed separately as \"Baseline config export before updates\" so the per-package configuration commits stay attributable."
       log "Committed the baseline drift separately."
       ;;
   esac

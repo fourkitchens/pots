@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+# Print the packages a security-update run should update, one per line.
+#
+# Called by scripts/updates/run-update via the POTS override/fallback pattern; also
+# runnable standalone for testing. Override it at
+# ./.circleci/scripts/updates/select-packages-security to change how a project decides what
+# counts as a security update.
+#
+# Source: `composer audit`, filtered to Drupal packages. Composer reports an advisory for
+# every affected package, including transitive ones; we only act on drupal/* because those
+# are what a Drupal site's maintainers can meaningfully review and test.
+#
+# Output:
+#   stdout  one composer package name per line (empty when there is nothing to do)
+#   stderr  human-readable logging
+#
+# Always exits 0: "no security updates" is a normal outcome, not a failure.
+
+set -eo pipefail
+
+log() { echo "[updates:select] $*" >&2; }
+
+AUDIT_JSON="$(composer audit --format=json 2>/dev/null || true)"
+
+if [ -z "$AUDIT_JSON" ] || ! echo "$AUDIT_JSON" | jq empty >/dev/null 2>&1; then
+  log "composer audit produced no usable JSON; nothing to update."
+  exit 0
+fi
+
+PACKAGES="$(echo "$AUDIT_JSON" | jq -r '.advisories | keys[]? | select(startswith("drupal/"))' | sort -u)"
+
+if [ -z "$PACKAGES" ]; then
+  log "No Drupal security advisories found."
+  exit 0
+fi
+
+log "Security advisories affect: $(echo "$PACKAGES" | tr '\n' ' ')"
+printf '%s\n' "$PACKAGES"

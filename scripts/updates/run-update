@@ -1,38 +1,73 @@
 #!/bin/bash
+#
+# Run an automated dependency update: update packages, apply the database updates and
+# configuration changes they bring with them, push a branch, open a ticket and a PR.
+#
+# Usage: run-update [security|composer]
+#
+#   security  (default) update packages with known security advisories.
+#   composer            routine MINOR updates - minor and patch releases only, never a
+#                       major. Majors are reported in the PR body instead of applied.
+#
+# The two modes differ only in which packages are selected, which is delegated to an
+# overridable select-packages-<mode> script. Everything after that - the Drupal
+# environment, updatedb, config export, commits, push, ticket and PR - is shared.
 
 # Exit on error
 set -e
 
-echo "Updating projects"
+UPDATE_MODE="${1:-security}"
+
+echo "Updating projects (mode: $UPDATE_MODE)"
 DIR=$(pwd)
 COMPOSER_CMD=$(which composer)
 NOW=$(date +'%F')
 cd $DIR
 
 # Resolve a script or template that ships with POTS, honouring a consumer override in
-# ./.circleci/scripts/security-updates/. Everything this script calls out to must go through
+# ./.circleci/scripts/updates/. Everything this script calls out to must go through
 # here: hardcoding the vendor path means a consumer who overrides one file still silently
 # gets the vendored copy of the others.
 pots_file () {
-  if [ -f "./.circleci/scripts/security-updates/$1" ]; then
-    echo "./.circleci/scripts/security-updates/$1"
+  if [ -f "./.circleci/scripts/updates/$1" ]; then
+    echo "./.circleci/scripts/updates/$1"
   else
-    echo "./vendor/fourkitchens/pots/scripts/security-updates/$1"
+    echo "./vendor/fourkitchens/pots/scripts/updates/$1"
   fi
 }
 
 source "$( pots_file 4k-openai-lib.sh )"
-BRANCH_NAME="feature/automated-sec-update-$NOW"
 
-AUTOSEC_STATE_DIR="${AUTOSEC_STATE_DIR:-/tmp/autosec}"
-export AUTOSEC_STATE_DIR
-rm -rf "$AUTOSEC_STATE_DIR"
-mkdir -p "$AUTOSEC_STATE_DIR"
+# Everything that differs between the two modes lives here.
+case "$UPDATE_MODE" in
+  security)
+    BRANCH_NAME="feature/automated-sec-update-$NOW"
+    PR_TITLE="(AUTO-SEC): Security updates for $NOW"
+    COMMIT_PREFIX="(AUTO-SEC)"
+    ;;
+  composer)
+    BRANCH_NAME="feature/automated-composer-update-$NOW"
+    PR_TITLE="(AUTO-UPDATE): Minor composer updates for $NOW"
+    COMMIT_PREFIX="(AUTO-UPDATE)"
+    ;;
+  *)
+    echo "Unknown update mode '$UPDATE_MODE' (expected 'security' or 'composer')." >&2
+    exit 1
+    ;;
+esac
+PR_TEMPLATE="PULL_REQUEST_TEMPLATE-${UPDATE_MODE}.md"
+# Shared with apply-db-updates and setup-drupal-env so every commit this run makes carries
+# the same prefix.
+export COMMIT_PREFIX
 
-# 1. Load the JSON data in a variable.
-JSON_DATA=$(jq -r)
-# 2. Use jq to parse the JSON and extract the "advisories" object.
-ADVISORIES=$(echo "$JSON_DATA" | jq '.advisories')
+UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
+export UPDATE_STATE_DIR
+rm -rf "$UPDATE_STATE_DIR"
+mkdir -p "$UPDATE_STATE_DIR"
+
+# Ask the mode's selector which packages to update. It prints one package name per line and
+# always exits 0, so "nothing to update" is a normal, quiet outcome.
+PACKAGES="$( "$( pots_file "select-packages-${UPDATE_MODE}" )" || true )"
 
 MESSAGE=""
 TEST_STEPS=""
@@ -54,30 +89,17 @@ gh_branch_exist () {
 
 # Creates a Git branch.
 create_gh_branch () {
-  # Create security update branch for $NOW
+  # Create the update branch for $NOW. -B rather than `git branch` + `git checkout` so a
+  # re-run on a workspace that already has the branch locally resets it instead of dying
+  # under `set -e`.
   cd $DIR
-  git branch $BRANCH_NAME
-  git checkout $BRANCH_NAME
+  git checkout -B "$BRANCH_NAME"
   echo "true"
 }
 
-# Helper function to check if there are available sec update to apply.
-security_updates_available () {
-  # 3. Loop through each key-value pair in the "advisories" object.
-  AVAILABLE_UPDATE="false"
-  for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
-    PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
-     if [[ "${PROJECT}" == drupal* ]]; then
-       AVAILABLE_UPDATE="true"
-       break
-     fi
-  done
-  echo $AVAILABLE_UPDATE
-}
-
- # Checking there pending sec updates.
-if [[ $(security_updates_available) == "true" ]]; then
-  echo "There are available security updates, starting automatic update process..."
+ # Only do any work when the selector actually found something.
+if [ -n "$PACKAGES" ]; then
+  echo "Packages to update: $(echo "$PACKAGES" | tr '\n' ' ')"
   if [[ $(gh_branch_exist) == "false" ]]
   then
     echo "Creating Git branch for the sec update..."
@@ -92,28 +114,34 @@ if [[ $(security_updates_available) == "true" ]]; then
   # releases can be run and any configuration they change can be exported. This is only
   # worth doing once we know there is something to update. A failure here is recorded and
   # reported in the PR body, but must not stop the security updates themselves.
-  if [[ "${SEC_UPDATE_RUN_DB_UPDATES:-YES}" != "NO" ]]; then
+  if [[ "${UPDATE_RUN_DB_UPDATES:-YES}" != "NO" ]]; then
     echo "Preparing the Drupal environment for database updates..."
     "$( pots_file setup-drupal-env )" || true
   else
-    echo "SEC_UPDATE_RUN_DB_UPDATES is 'NO'. Skipping database updates and configuration export."
-    : > "$AUTOSEC_STATE_DIR/disabled"
+    echo "UPDATE_RUN_DB_UPDATES is 'NO'. Skipping database updates and configuration export."
+    : > "$UPDATE_STATE_DIR/disabled"
   fi
 
-  # Loop through each key-value pair in the "advisories" object.
-  for PACKAGE_NAME in $(echo "$ADVISORIES" | jq -r 'keys | @sh'); do
-    PROJECT=$(echo $PACKAGE_NAME | tr -d "'")
-
-    if [[ "${PROJECT}" == drupal* ]]; then
-      echo "Updating $PROJECT"
-      echo "-----------------"
-      cd $DIR
-      $COMPOSER_CMD update $PROJECT --with-dependencies
-      # Check for any changes
-      if [[ `git status --porcelain` ]]; then
+  # Update one package at a time. This is a *partial* composer update, which matters: a full
+  # `composer update` re-resolves the whole graph and can fail for reasons unrelated to the
+  # packages we want to move (an advisory-blocked pin, a path-repo branch mismatch). Partial
+  # updates sidestep that, and they give per-package commits a reviewer can follow.
+  while IFS= read -r PROJECT; do
+    [ -z "$PROJECT" ] && continue
+    echo "Updating $PROJECT"
+    echo "-----------------"
+    cd $DIR
+    # A package can legitimately refuse to move (an exact version pin, a conflicting
+    # dependency). That is not a failure of the run: the git check below simply skips it.
+    $COMPOSER_CMD update "$PROJECT" --with-dependencies || {
+      echo "Could not update $PROJECT; skipping it."
+      continue
+    }
+    # Check for any changes
+    if [[ `git status --porcelain` ]]; then
         #committing recent changes.
         git add composer.*
-        git commit -m "(AUTO-SEC): Updated project $PROJECT (Security update)"
+        git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT"
 
         # Run the database updates this package brings with it and commit any configuration
         # they changed. Always exits 0; prints a Markdown summary for the PR body.
@@ -126,7 +154,10 @@ if [[ $(security_updates_available) == "true" ]]; then
         # Remove prefix "drupal/" from the project name
         AUX=${PROJECT//drupal\//''}
         PROJECTS_UPDATED+="${AUX}, "
-        if [ $AUX == 'core' ]; then
+        if [[ "$PROJECT" != drupal/* ]]; then
+          # Not a Drupal project, so there is no drupal.org release page to link.
+          AUX="- Update [${PROJECT}](https://packagist.org/packages/${PROJECT})."
+        elif [ $AUX == 'core' ] || [ $AUX == 'core-recommended' ] || [ $AUX == 'core-composer-scaffold' ]; then
           AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
         else
           AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
@@ -135,7 +166,11 @@ if [[ $(security_updates_available) == "true" ]]; then
         # AI-generated testing steps (optional). A failure here must never abort the
         # update run, so the call is non-fatal and we only append when it returned text.
         if [ -n "${OPENAI_API_KEY}" ]; then
-          PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional testing instructions for it?"
+          if [ "$UPDATE_MODE" = "security" ]; then
+            PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional testing instructions for it?"
+          else
+            PROMPT_TEXT="I am applying a routine minor update to the following drupal project: $PROJECT, could you give me functional testing instructions for it?"
+          fi
           # Tell the model what the update actually did, so the steps target the areas that
           # changed instead of being generic.
           if [ -n "$DB_SUMMARY" ]; then
@@ -150,9 +185,8 @@ if [[ $(security_updates_available) == "true" ]]; then
         fi
         echo "Updated $PROJECT"
         echo "---------------"
-      fi
     fi
-  done
+  done <<< "$PACKAGES"
   echo "Projects updated"
   echo "---------------"
 
@@ -163,19 +197,30 @@ if [[ $(security_updates_available) == "true" ]]; then
   then
     echo "Nothing to update."
   else
-    echo "Pushing security update changes to remote repo"
+    echo "Pushing update changes to remote repo"
     echo "-------------------------------------------"
     git push --set-upstream origin $BRANCH_NAME
 
-    TITLE="(AUTO-SEC): Security updates for $NOW"
 
     # Fold the database/configuration results, and any warnings the database phase
     # recorded, into one section of the PR body.
-    if [ -f "$AUTOSEC_STATE_DIR/notes" ]; then
+    if [ -f "$UPDATE_STATE_DIR/notes" ]; then
       while IFS= read -r LINE; do
         [ -n "$LINE" ] && CONFIG_CHANGES+="- :warning: ${LINE}\n"
-      done < "$AUTOSEC_STATE_DIR/notes"
+      done < "$UPDATE_STATE_DIR/notes"
     fi
+    # Major upgrades the selector deliberately did not apply. Surfacing them is the point:
+    # the team needs to know a major is waiting, and that a human has to plan it.
+    BLOCKED_UPDATES=""
+    if [ -s "$UPDATE_STATE_DIR/blocked" ]; then
+      while IFS= read -r LINE; do
+        [ -n "$LINE" ] && BLOCKED_UPDATES+="- \`${LINE}\`\n"
+      done < "$UPDATE_STATE_DIR/blocked"
+    fi
+    if [ -z "$BLOCKED_UPDATES" ]; then
+      BLOCKED_UPDATES="_None._"
+    fi
+
     if [ -z "$CONFIG_CHANGES" ]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
     fi
@@ -195,7 +240,7 @@ if [[ $(security_updates_available) == "true" ]]; then
       clickup|productive)
         TICKET_SCRIPT=$( pots_file "create-${TICKETING_SYSTEM:-clickup}-ticket" )
         if [ -x "$TICKET_SCRIPT" ]; then
-          TICKET_URL=$( "$TICKET_SCRIPT" "$PROJECTS_UPDATED" || true)
+          TICKET_URL=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" || true)
         else
           echo "No ticket script found at ${TICKET_SCRIPT}; skipping ticketing."
         fi
@@ -206,20 +251,21 @@ if [[ $(security_updates_available) == "true" ]]; then
     esac
 
     # Create the PR, linking the ticket if one was created.
-    echo "Creating security updates Pull request."
+    echo "Creating the update Pull request."
     echo "-------------------------------------------"
     if [ -z "$TICKET_URL" ]; then
       TICKET_URL="_No ticket was created for this update._"
     fi
-    BODY=$(cat "$( pots_file PULL_REQUEST_TEMPLATE.md )")
+    BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
     BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
+    BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
     BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
     BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
     if [ ! -z "$SITE_NAME" ]; then
       BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
     fi
-    PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
+    PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$PR_TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
 
     # Running the request
     response=$( \
@@ -237,7 +283,7 @@ if [[ $(security_updates_available) == "true" ]]; then
     response_body="${response%???}"
 
     if [ "$http_status" == "200" -o "$http_status" == "201" ]; then
-      echo "Pull request: $TITLE successfully created."
+      echo "Pull request: $PR_TITLE successfully created."
       echo "-------------------------------------------"
 
       # The PR number only exists once the PR does, so the environment links in the template
@@ -260,7 +306,7 @@ if [[ $(security_updates_available) == "true" ]]; then
           -d "$(jq -n --arg body "$FINAL_BODY" '{body: $body}')" || true
       fi
     else
-      echo "Failed to create pull request: $TITLE. HTTP status code: $http_status"
+      echo "Failed to create pull request: $PR_TITLE. HTTP status code: $http_status"
       echo "-------------------------------------------"
       exit 1
     fi

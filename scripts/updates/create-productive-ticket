@@ -2,17 +2,17 @@
 #
 # Create a Productive.io task for an AutoSec security-update run and print its URL to stdout.
 #
-# The sibling of scripts/security-updates/create-clickup-ticket, deliberately sharing its
+# The sibling of scripts/updates/create-clickup-ticket, deliberately sharing its
 # contract so both can run side by side while Four Kitchens migrates from ClickUp to
-# Productive. Called by scripts/security-updates/automatic-update via the POTS
+# Productive. Called by scripts/updates/run-update via the POTS
 # override/fallback pattern; also runnable standalone for testing.
 #
 # Inputs:
 #   $1                    Comma-separated list of updated projects (for the ticket body).
 #   PRODUCTIVE_TOKEN (env) Productive API token. A CircleCI project env var, kept OUT of
-#                         SEC_UPDATE_DATA (pipeline parameters are readable via the
+#                         UPDATE_DATA (pipeline parameters are readable via the
 #                         CircleCI API/UI).
-#   SEC_UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
+#   UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
 #                         organization_id, project_id, task_list_id (optional),
 #                         board_id (optional), assignee_id (optional),
 #                         workflow_status_id (optional), task_url_template (optional).
@@ -33,17 +33,17 @@ PR_API="https://api.productive.io/api/v2"
 
 log() { echo "$@" >&2; }
 
-# Unpack the Productive settings from the SEC_UPDATE_DATA pipeline parameter (JSON).
+# Unpack the Productive settings from the UPDATE_DATA pipeline parameter (JSON).
 # Only unpack when it holds valid, non-empty JSON; otherwise the PR_* vars stay empty and
 # the gate below skips ticket creation.
-if [ -n "${SEC_UPDATE_DATA:-}" ] && [ "${SEC_UPDATE_DATA}" != "{}" ] && echo "$SEC_UPDATE_DATA" | jq empty >/dev/null 2>&1; then
-  PR_ORG_ID=$(jq -r '.organization_id // empty'         <<<"$SEC_UPDATE_DATA")
-  PR_PROJECT_ID=$(jq -r '.project_id // empty'          <<<"$SEC_UPDATE_DATA")
-  PR_TASK_LIST_ID=$(jq -r '.task_list_id // empty'      <<<"$SEC_UPDATE_DATA")
-  PR_BOARD_ID=$(jq -r '.board_id // empty'              <<<"$SEC_UPDATE_DATA")
-  PR_ASSIGNEE_ID=$(jq -r '.assignee_id // empty'        <<<"$SEC_UPDATE_DATA")
-  PR_STATUS_ID=$(jq -r '.workflow_status_id // empty'   <<<"$SEC_UPDATE_DATA")
-  PR_URL_TEMPLATE=$(jq -r '.task_url_template // empty' <<<"$SEC_UPDATE_DATA")
+if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] && echo "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+  PR_ORG_ID=$(jq -r '.organization_id // empty'         <<<"$UPDATE_DATA")
+  PR_PROJECT_ID=$(jq -r '.project_id // empty'          <<<"$UPDATE_DATA")
+  PR_TASK_LIST_ID=$(jq -r '.task_list_id // empty'      <<<"$UPDATE_DATA")
+  PR_BOARD_ID=$(jq -r '.board_id // empty'              <<<"$UPDATE_DATA")
+  PR_ASSIGNEE_ID=$(jq -r '.assignee_id // empty'        <<<"$UPDATE_DATA")
+  PR_STATUS_ID=$(jq -r '.workflow_status_id // empty'   <<<"$UPDATE_DATA")
+  PR_URL_TEMPLATE=$(jq -r '.task_url_template // empty' <<<"$UPDATE_DATA")
 fi
 
 # Gate: need the token (env) + organization + project. Skip cleanly otherwise.
@@ -54,16 +54,23 @@ fi
 
 # Resolve the ticket template: consumer override, else the copy beside this script. This is
 # the same template ClickUp uses -- the wording is provider-agnostic on purpose.
-if [ -f "./.circleci/scripts/security-updates/TICKET_TEMPLATE.md" ]; then
-  TEMPLATE="./.circleci/scripts/security-updates/TICKET_TEMPLATE.md"
+# The wording differs between a security run and a routine maintenance run, so the template
+# is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
+TEMPLATE_NAME="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md"
+if [ -f "./.circleci/scripts/updates/${TEMPLATE_NAME}" ]; then
+  TEMPLATE="./.circleci/scripts/updates/${TEMPLATE_NAME}"
 else
-  TEMPLATE="$(dirname "$0")/TICKET_TEMPLATE.md"
+  TEMPLATE="$(dirname "$0")/${TEMPLATE_NAME}"
 fi
 
 PR_BODY_MESSAGE=$(cat "$TEMPLATE")
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
-PR_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+if [ "${UPDATE_MODE:-security}" = "composer" ]; then
+  PR_TICKET_TITLE="Maintenance Updates For Your Website - ${SITE_NAME}"
+else
+  PR_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+fi
 DUE_DATE="$(date +%F)"
 
 # Build the JSON:API request body with jq so quotes/newlines in the site name or project
@@ -118,7 +125,7 @@ if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
   else
     # Productive does not return a web URL for the task, so build one. The template is
     # configurable because the permalink shape is not part of the documented API: set
-    # task_url_template in SEC_UPDATE_DATA if this default ever stops matching.
+    # task_url_template in UPDATE_DATA if this default ever stops matching.
     TEMPLATE_URL="${PR_URL_TEMPLATE:-https://app.productive.io/{org}/task/{id}}"
     TICKET_URL=${TEMPLATE_URL//\{org\}/$PR_ORG_ID}
     TICKET_URL=${TICKET_URL//\{id\}/$TASK_ID}

@@ -1,0 +1,109 @@
+#!/bin/bash
+#
+# Print the packages a routine composer-update run should update, one per line.
+#
+# Called by scripts/updates/run-update via the POTS override/fallback pattern; also runnable
+# standalone for testing. Override it at
+# ./.circleci/scripts/updates/select-packages-composer to change the selection policy.
+#
+# MINOR UPGRADES ONLY. Major version jumps are never applied automatically: they are
+# breaking by definition and need a human to plan and test them. That restriction is
+# enforced by Composer's own semver logic rather than by parsing version strings here:
+#
+#   composer outdated --direct --minor-only   recomputes each package's target as the newest
+#                                             release within the SAME major version
+#   latest-status == "semver-safe-update"     and the project's own constraints allow it
+#
+# Both halves are needed. --minor-only alone would still list a package whose constraint
+# pins it (e.g. "10.2.*" shows a 10.6 candidate but reports "update-possible"), and
+# latest-status alone would let a major through on a constraint like "^1.0 || ^2.0".
+#
+# Note --minor-only includes patch releases, so "minor" here means minor + patch.
+#
+# Inputs:
+#   UPDATE_LEVEL      minor (default) or patch. There is deliberately no "major".
+#   UPDATE_EXCLUDE    space-separated globs of package names to hold back, e.g.
+#                     "drupal/core-* symfony/*"
+#   UPDATE_STATE_DIR  where to record the majors we deliberately skipped. Default: /tmp/pots-update
+#
+# Output:
+#   stdout                     one composer package name per line
+#   $UPDATE_STATE_DIR/blocked  "name current -> latest" for each available MAJOR upgrade, so
+#                              run-update can report them in the PR as needing a human
+#   stderr                     human-readable logging
+#
+# Always exits 0: "nothing to update" is a normal outcome.
+
+set -eo pipefail
+
+STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
+mkdir -p "$STATE_DIR"
+
+log() { echo "[updates:select] $*" >&2; }
+
+LEVEL="${UPDATE_LEVEL:-minor}"
+case "$LEVEL" in
+  minor|patch) ;;
+  *)
+    log "UPDATE_LEVEL '$LEVEL' is not supported (use minor or patch); falling back to minor."
+    LEVEL="minor"
+    ;;
+esac
+
+# Record the major upgrades that exist but will NOT be applied. Reporting these is the point:
+# a blocked major is information the team needs, not something to hide.
+MAJOR_JSON="$(composer outdated --direct --major-only --format=json 2>/dev/null || true)"
+: > "$STATE_DIR/blocked"
+if [ -n "$MAJOR_JSON" ] && echo "$MAJOR_JSON" | jq empty >/dev/null 2>&1; then
+  echo "$MAJOR_JSON" \
+    | jq -r '.installed[]? | select(.latest != null) | "\(.name) \(.version) -> \(.latest)"' \
+    >> "$STATE_DIR/blocked" || true
+fi
+
+OUTDATED_JSON="$(composer outdated --direct --"${LEVEL}"-only --format=json 2>/dev/null || true)"
+
+if [ -z "$OUTDATED_JSON" ] || ! echo "$OUTDATED_JSON" | jq empty >/dev/null 2>&1; then
+  log "composer outdated produced no usable JSON; nothing to update."
+  exit 0
+fi
+
+# semver-safe-update == composer update will actually move it without touching composer.json.
+# Skip abandoned packages (they need replacing, not updating) and dev-* installs (no
+# meaningful version to compare).
+CANDIDATES="$(echo "$OUTDATED_JSON" | jq -r '
+  .installed[]?
+  | select(.["latest-status"] == "semver-safe-update")
+  | select((.abandoned // false) == false)
+  | select((.version // "") | startswith("dev-") | not)
+  | .name' | sort -u)"
+
+# Optional per-project hold-back list.
+PACKAGES=""
+for PKG in $CANDIDATES; do
+  SKIP="no"
+  for PATTERN in ${UPDATE_EXCLUDE:-}; do
+    # shellcheck disable=SC2053
+    if [[ "$PKG" == $PATTERN ]]; then
+      SKIP="yes"
+      break
+    fi
+  done
+  if [ "$SKIP" = "yes" ]; then
+    log "Skipping $PKG (matches UPDATE_EXCLUDE)."
+  else
+    PACKAGES+="${PKG}"$'\n'
+  fi
+done
+PACKAGES="$(printf '%s' "$PACKAGES" | sed '/^$/d')"
+
+if [ -z "$PACKAGES" ]; then
+  log "No ${LEVEL}-level updates available within the project's version constraints."
+else
+  log "Available ${LEVEL}-level updates: $(echo "$PACKAGES" | tr '\n' ' ')"
+fi
+
+if [ -s "$STATE_DIR/blocked" ]; then
+  log "Major upgrades available but NOT applied automatically: $(wc -l < "$STATE_DIR/blocked" | tr -d ' ') package(s)."
+fi
+
+printf '%s\n' "$PACKAGES"

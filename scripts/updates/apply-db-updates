@@ -3,13 +3,13 @@
 # Run the database updates a freshly updated package brings with it, export any resulting
 # configuration changes, and commit them to the AutoSec branch.
 #
-# Called by scripts/security-updates/automatic-update once per updated package, immediately
-# after that package's composer.* commit. Requires scripts/security-updates/setup-drupal-env
+# Called by scripts/updates/run-update once per updated package, immediately
+# after that package's composer.* commit. Requires scripts/updates/setup-drupal-env
 # to have prepared the environment first.
 #
 # Inputs:
 #   $1                  The composer package that was just updated, e.g. drupal/media.
-#   AUTOSEC_STATE_DIR   Where setup-drupal-env left its state. Default: /tmp/autosec
+#   UPDATE_STATE_DIR   Where setup-drupal-env left its state. Default: /tmp/pots-update
 #
 # Output:
 #   A Markdown summary of what happened on stdout, for the PR body. All human-readable
@@ -23,7 +23,7 @@
 set -eo pipefail
 
 PROJECT="${1:-}"
-STATE_DIR="${AUTOSEC_STATE_DIR:-/tmp/autosec}"
+STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
 
 log()  { echo "[autosec:db] $*" >&2; }
 note() { mkdir -p "$STATE_DIR"; printf '%s\n' "$*" >> "$STATE_DIR/notes"; }
@@ -94,7 +94,7 @@ fi
 CHANGED_COUNT="$( printf '%s\n' "$CHANGED" | wc -l | tr -d ' ' )"
 git add -- "$CONFIG_SYNC_DIR"
 # stdout is reserved for the PR body summary; git's commit chatter goes to the log.
-git commit -m "(AUTO-SEC): Exported configuration for $PROJECT" >&2
+git commit -m "${COMMIT_PREFIX:-(AUTO-SEC)}: Exported configuration for $PROJECT" >&2
 log "Committed $CHANGED_COUNT configuration file(s) for $PROJECT."
 
 ##
