@@ -66,6 +66,19 @@ fi
 PR_BODY_MESSAGE=$(cat "$TEMPLATE")
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
+
+# Productive renders the task description as HTML, so the template's blank lines and
+# single newlines collapse into one run-on paragraph. Turn blank-line-separated blocks
+# into <p> and the newlines inside a block into <br>. HTML metacharacters are escaped
+# first, so a site name or package list containing & or < cannot break the markup -- and
+# that has to happen before the tags are added, not after.
+PR_BODY_HTML=$(jq -rn --arg t "$PR_BODY_MESSAGE" '
+  $t
+  | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+  | split("\n[ \t]*\n"; null)
+  | map(select(test("[^ \t\n]")) | sub("^\n+"; "") | sub("\n+$"; "") | gsub("\n"; "<br>") | "<p>" + . + "</p>")
+  | join("")
+')
 if [ "${UPDATE_MODE:-security}" = "composer" ]; then
   PR_TICKET_TITLE="Maintenance Updates For Your Website - ${SITE_NAME}"
 else
@@ -80,7 +93,7 @@ DUE_DATE="$(date +%F)"
 # sending a null relationship is rejected.
 PR_JSON_DATA=$(jq -n \
   --arg title "$PR_TICKET_TITLE" \
-  --arg desc "$PR_BODY_MESSAGE" \
+  --arg desc "$PR_BODY_HTML" \
   --arg due "$DUE_DATE" \
   --arg project "$PR_PROJECT_ID" \
   --arg task_list "${PR_TASK_LIST_ID:-}" \

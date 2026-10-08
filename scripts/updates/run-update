@@ -265,7 +265,21 @@ if [ -n "$PACKAGES" ]; then
     if [ ! -z "$SITE_NAME" ]; then
       BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
     fi
-    PARAMETERS=$(printf '{"title":"%s","body":"%s","head":"%s","base":"%s"}' "$PR_TITLE" "${BODY//$'\n'/\\n}" "$BRANCH_NAME" "$CIRCLE_BRANCH")
+    # The body carries free-form text -- the AI testing steps and the database/config
+    # summary -- so it can contain double quotes and backslashes. Hand-building the JSON
+    # with printf escaped newlines only, and a single quote in the model's output was
+    # enough to make GitHub reject the whole request with HTTP 400. Let jq encode it.
+    # The template's own sections carry literal "\n" escapes rather than real newlines,
+    # so turn those into real ones first. Substitution rather than printf '%b': %b would
+    # also expand any other backslash sequence the model happened to emit, so a Windows
+    # path in the testing steps would come out with a tab in it.
+    BODY_JSON=${BODY//\\n/$'\n'}
+    PARAMETERS=$(jq -n \
+      --arg title "$PR_TITLE" \
+      --arg body  "$BODY_JSON" \
+      --arg head  "$BRANCH_NAME" \
+      --arg base  "$CIRCLE_BRANCH" \
+      '{title: $title, body: $body, head: $head, base: $base}')
 
     # Running the request
     response=$( \
@@ -294,9 +308,9 @@ if [ -n "$PACKAGES" ]; then
         FINAL_BODY=${BODY//\[PR_NUMBER\]/$PR_NUMBER}
         FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/$PR_NUMBER}
         FINAL_BODY=${FINAL_BODY//\[PROJECT\]/$SITE_NAME}
-        # The template's own sections carry literal "\n" escapes (that is how they survive
-        # the create request's printf); jq would encode them verbatim, so expand them first.
-        FINAL_BODY=$(printf '%b' "$FINAL_BODY")
+        # Same literal "\n" expansion as the create request above, and the same reason for
+        # preferring substitution over printf '%b'.
+        FINAL_BODY=${FINAL_BODY//\\n/$'\n'}
         curl -sS -o /dev/null -L \
           -X PATCH \
           -H "Accept: application/vnd.github+json" \
@@ -307,6 +321,10 @@ if [ -n "$PACKAGES" ]; then
       fi
     else
       echo "Failed to create pull request: $PR_TITLE. HTTP status code: $http_status"
+      # Without this the response body is captured and thrown away, leaving a bare status
+      # code with no indication of what GitHub objected to.
+      echo "$response_body" | jq -r '[.message // empty] + [.errors[]?.message // empty] | .[]' 2>/dev/null \
+        || echo "$response_body"
       echo "-------------------------------------------"
       exit 1
     fi
