@@ -26,7 +26,17 @@ PROJECT="${1:-}"
 STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
 
 log()  { echo "[autosec:db] $*" >&2; }
-note() { mkdir -p "$STATE_DIR"; printf '%s\n' "$*" >> "$STATE_DIR/notes"; }
+# Must stay a single line: run-update renders the notes file one ":warning:" bullet per
+# line. Mirrors the helper in setup-drupal-env.
+note() {
+  mkdir -p "$STATE_DIR"
+  printf '%s' "$*" \
+    | tr '\n\r\t' '   ' \
+    | tr -s ' ' \
+    | cut -c1-500 \
+    | sed 's/[[:space:]]*$//' >> "$STATE_DIR/notes"
+  printf '\n' >> "$STATE_DIR/notes"
+}
 
 if [ -z "$PROJECT" ]; then
   log "No package name given; nothing to do."

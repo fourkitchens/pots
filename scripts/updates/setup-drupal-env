@@ -47,7 +47,17 @@ STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
 mkdir -p "$STATE_DIR"
 
 log()  { echo "[autosec:setup] $*" >&2; }
-note() { printf '%s\n' "$*" >> "$STATE_DIR/notes"; }
+# run-update renders this file one ":warning:" bullet per line, so a note has to be a
+# single line: collapse any embedded newline or run of whitespace, and cap the length so
+# an unexpectedly large interpolated value cannot swamp the pull request body.
+note() {
+  printf '%s' "$*" \
+    | tr '\n\r\t' '   ' \
+    | tr -s ' ' \
+    | cut -c1-500 \
+    | sed 's/[[:space:]]*$//' >> "$STATE_DIR/notes"
+  printf '\n' >> "$STATE_DIR/notes"
+}
 
 # Record why the database/config-export phase cannot run. apply-db-updates checks for this
 # flag and becomes a no-op, so the composer updates, push and PR still happen.
@@ -81,6 +91,23 @@ else
 fi
 log "Using drush at $DRUSH"
 DRUSH_CMD=( "$DRUSH" --root="$DRUPAL_ROOT" )
+
+# Read a single --format=string field from drush.
+#
+# PHP CLI sends display_errors output to STDOUT, not STDERR, so "2>/dev/null" does not stop
+# "Deprecated: ..." notices from landing inside a captured value -- and on PHP 8.4 the
+# Drupal/Drush dependency tree emits dozens of them. A polluted value then fails whatever
+# check it feeds and gets quoted verbatim into the pull request body.
+#
+# Drop the PHP diagnostics, then take the last non-empty line: that is the field value.
+drush_value() {
+  "${DRUSH_CMD[@]}" "$@" --format=string 2>/dev/null \
+    | grep -Ev '^[[:space:]]*(PHP )?(Deprecated|Warning|Notice|Strict Standards|Fatal error|Parse error):' \
+    | grep -Ev '^[[:space:]]*(#[0-9]+ |PHP Stack trace:|thrown in )' \
+    | grep -v '^[[:space:]]*$' \
+    | tail -n 1 \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
 
 ##
 # 2. Wait for the database sidecar to accept connections.
@@ -234,14 +261,14 @@ fi
 # configuration into a directory nothing reads. Ask Drupal where its sync directory is and
 # refuse to continue unless it is a real, in-repo config directory.
 ##
-DB_STATUS="$( "${DRUSH_CMD[@]}" status --field=db-status --format=string 2>/dev/null || true )"
+DB_STATUS="$( drush_value status --field=db-status || true )"
 if [[ "$DB_STATUS" != *"Connected"* ]]; then
   disable_phase "Drupal could not connect to the restored database (drush reported '${DB_STATUS:-no answer}'). Check that $CI_SETTINGS_FILE is included by the project's settings.php."
   exit 1
 fi
 log "Drupal is connected to the restored database."
 
-RAW_SYNC_DIR="$( "${DRUSH_CMD[@]}" status --field=config-sync --format=string 2>/dev/null || true )"
+RAW_SYNC_DIR="$( drush_value status --field=config-sync || true )"
 if [ -z "$RAW_SYNC_DIR" ]; then
   disable_phase "Drupal did not report a config sync directory; \$settings['config_sync_directory'] is probably unset."
   exit 1
