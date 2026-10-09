@@ -10,6 +10,9 @@
 ### Major upgrades available but not applied:
 [BLOCKED_UPDATES]
 
+### Updates that could not be applied:
+[FAILED_UPDATES]
+
 ### Pull Request Environment:
 https://pr-[PR_NUMBER]-[PROJECT_NAME].pantheonsite.io/
 

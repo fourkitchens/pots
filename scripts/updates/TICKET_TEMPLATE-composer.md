@@ -8,5 +8,6 @@ can change how the site behaves.
 
 Updated: [PROJECTS]
 
+[FAILURES]
 These updates are being performed automatically, and we'll let you know when it is complete.
 Thank You!

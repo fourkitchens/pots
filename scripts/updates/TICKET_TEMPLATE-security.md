@@ -7,5 +7,6 @@ In other words, this will not count towards your subscription hours.
 
 Security updates are required for: [PROJECTS]
 
+[FAILURES]
 These updates are being performed automatically, and we'll let you know when it is complete.
 Thank You!

@@ -5,9 +5,17 @@
 #
 # Usage: run-update [security|composer]
 #
-#   security  (default) update packages with known security advisories.
-#   composer            routine MINOR updates - minor and patch releases only, never a
-#                       major. Majors are reported in the PR body instead of applied.
+#   security  (default) update packages with known security advisories. When an advisory
+#                       has no fix inside the package's current major, the constraint is
+#                       raised and the major is applied: staying vulnerable is worse.
+#   composer            routine MINOR updates - minor and patch releases. A major is
+#                       applied only for a package whose installed branch is unsupported
+#                       (it would otherwise never receive another fix); every other major
+#                       is reported in the PR body instead of applied.
+#
+# Drupal core is always updated as one group, `composer update "drupal/core-*"
+# --with-all-dependencies`, in both modes: its packages are released in lockstep and must
+# stay on the same version.
 #
 # The two modes differ only in which packages are selected, which is delegated to an
 # overridable select-packages-<mode> script. Everything after that - the Drupal
@@ -97,8 +105,116 @@ create_gh_branch () {
   echo "true"
 }
 
+
+##
+# Drupal core grouping.
+#
+# Core is not one package. drupal/core, drupal/core-recommended,
+# drupal/core-composer-scaffold, drupal/core-project-message and drupal/core-dev are
+# released in lockstep and must always sit on the exact same version. Updating them one at
+# a time either fails outright -- core-recommended pins core to an exact version -- or
+# leaves the set straddling two releases. The documented Drupal procedure is a single
+# grouped update, so that is what a selected core package turns into:
+#
+#   composer update "drupal/core-*" --with-all-dependencies
+#
+# CORE_TOKEN is the placeholder that stands in for the whole group inside the update loop.
+##
+CORE_TOKEN='drupal/core-*'
+
+core_update_args() {
+  # "drupal/core-*" does not match drupal/core itself (no hyphen). That is normally fine:
+  # core-recommended pins core exactly, so --with-all-dependencies drags it along. Add it
+  # explicitly only when the project requires drupal/core directly instead.
+  printf '%s\n' "$CORE_TOKEN"
+  if jq -e '.require["drupal/core"] // empty' composer.json >/dev/null 2>&1; then
+    printf '%s\n' 'drupal/core'
+  fi
+}
+
+# Every drupal/core* package installed, as "name version" pairs.
+core_installed_versions() {
+  composer show --format=json 2>/dev/null \
+    | jq -r '.installed[]? | select(.name | test("^drupal/core(-|$)")) | "\(.name) \(.version)"' \
+    || true
+}
+
+# Requirement: the core packages must all land on the same version. The grouped update
+# should guarantee it, but a stale constraint on one of them can still split the set, and
+# a half-upgraded core is the kind of thing that must not reach a reviewer unannounced.
+check_core_versions_match() {
+  local pairs distinct
+  pairs="$( core_installed_versions )"
+  [ -z "$pairs" ] && return 0
+  distinct="$( printf '%s\n' "$pairs" | awk '{print $2}' | sort -u | wc -l | tr -d ' ' )"
+  if [ "$distinct" -gt 1 ]; then
+    echo "WARNING: drupal/core* packages are not all on the same version:" >&2
+    printf '%s\n' "$pairs" >&2
+    printf '%s\n' "drupal/core* packages did not all land on the same version after the grouped update ($( printf '%s' "$pairs" | tr '\n' ';' )). Check the constraints in composer.json before merging." \
+      >> "$UPDATE_STATE_DIR/notes"
+  fi
+}
+
+# Boil a failed composer run down to one reportable line.
+#
+# Composer prints its dependency conflicts as an indented "Problem N" block, which is the
+# part a human needs; everything around it is noise. Fall back to the last few non-empty
+# lines when the output does not match that shape (a network error, a plugin blowing up).
+summarise_composer_failure() {
+  local log="$1" summary
+  summary="$( sed -n '/^[[:space:]]*Problem [0-9]/,/^[[:space:]]*$/p' "$log" 2>/dev/null \
+    | sed 's/^[[:space:]]*//' | sed '/^$/d' | head -n 8 )"
+  if [ -z "$summary" ]; then
+    summary="$( grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 5 )"
+  fi
+  printf '%s' "$summary" | tr '\n\r\t' '   ' | tr -s ' ' | cut -c1-600 | sed 's/[[:space:]]*$//'
+}
+
+# Record a package the run could not update, for the PR body and the ticket.
+record_failure() {
+  printf '%s\t%s\n' "$1" "$2" >> "$UPDATE_STATE_DIR/failed"
+}
+
+# Packages the composer-mode selector marked as safe to take across a major boundary,
+# written as "name<TAB>reason" by select-packages-composer.
+major_allowed() {
+  [ -s "$UPDATE_STATE_DIR/allow-major" ] || return 1
+  cut -f1 "$UPDATE_STATE_DIR/allow-major" | grep -qxF "$1"
+}
+
+major_allowed_reason() {
+  awk -F'\t' -v p="$1" '$1 == p { print $2; exit }' "$UPDATE_STATE_DIR/allow-major" 2>/dev/null
+}
+
+# Is this package still covered by a security advisory, with whatever is installed now?
+package_still_vulnerable() {
+  local pkg="$1"
+  composer audit --format=json 2>/dev/null \
+    | jq -e --arg p "$pkg" '(.advisories // {}) | has($p)' >/dev/null 2>&1
+}
+
+# Newest release composer knows about for a package, ignoring the project's constraints.
+latest_available_version() {
+  local pkg="$1"
+  composer outdated "$pkg" --all --format=json 2>/dev/null \
+    | jq -r --arg p "$pkg" '.installed[]? | select(.name == $p) | .latest // empty' \
+    | head -n 1
+}
+
+installed_version() {
+  local pkg="$1"
+  composer show "$pkg" --format=json 2>/dev/null | jq -r '.versions[0] // empty' | head -n 1
+}
+
  # Only do any work when the selector actually found something.
 if [ -n "$PACKAGES" ]; then
+  # Fold every selected drupal/core* package into the single CORE_TOKEN entry, and put it
+  # first so contrib resolves against the new core rather than the old one.
+  if printf '%s\n' "$PACKAGES" | grep -qE '^drupal/core(-[a-z-]+)?$'; then
+    echo "Core packages selected ($( printf '%s\n' "$PACKAGES" | grep -E '^drupal/core(-[a-z-]+)?$' | tr '\n' ' ')); updating them as one group."
+    PACKAGES="$( printf '%s\n' "$PACKAGES" | grep -vE '^drupal/core(-[a-z-]+)?$' || true )"
+    PACKAGES="$( printf '%s\n%s\n' "$CORE_TOKEN" "$PACKAGES" | sed '/^$/d' )"
+  fi
   echo "Packages to update: $(echo "$PACKAGES" | tr '\n' ' ')"
   if [[ $(gh_branch_exist) == "false" ]]
   then
@@ -128,48 +244,144 @@ if [ -n "$PACKAGES" ]; then
   # updates sidestep that, and they give per-package commits a reviewer can follow.
   while IFS= read -r PROJECT; do
     [ -z "$PROJECT" ] && continue
-    echo "Updating $PROJECT"
-    echo "-----------------"
     cd $DIR
+    # The core group is several packages behind one token. PROJECT_LABEL is what the PR,
+    # the commits and the AI prompt should call it; PROJECT stays the composer argument.
+    if [ "$PROJECT" = "$CORE_TOKEN" ]; then
+      PROJECT_LABEL="drupal/core"
+      IS_CORE_GROUP="yes"
+      UPDATE_TARGETS=()
+      while IFS= read -r CORE_ARG; do
+        [ -n "$CORE_ARG" ] && UPDATE_TARGETS+=( "$CORE_ARG" )
+      done < <( core_update_args )
+    else
+      PROJECT_LABEL="$PROJECT"
+      IS_CORE_GROUP="no"
+      UPDATE_TARGETS=( "$PROJECT" )
+    fi
+    echo "Updating $PROJECT_LABEL"
+    echo "-----------------"
+    VERSION_BEFORE="$( installed_version "$PROJECT_LABEL" )"
+    # Core moves as a set, so it needs --with-all-dependencies; a single package is kept to
+    # --with-dependencies, which is the narrower, more predictable partial update.
+    if [ "$IS_CORE_GROUP" = "yes" ]; then
+      UPDATE_FLAG="--with-all-dependencies"
+    else
+      UPDATE_FLAG="--with-dependencies"
+    fi
     # A package can legitimately refuse to move (an exact version pin, a conflicting
-    # dependency). That is not a failure of the run: the git check below simply skips it.
-    $COMPOSER_CMD update "$PROJECT" --with-dependencies || {
-      echo "Could not update $PROJECT; skipping it."
+    # dependency). That does not fail the run -- the other packages still get updated --
+    # but it must not vanish either: a package nobody notices is stuck is a package that
+    # stays un-updated for months. Capture the reason for the PR body and the ticket.
+    UPDATE_LOG="$UPDATE_STATE_DIR/update-$( printf '%s' "$PROJECT_LABEL" | tr '/*' '--' ).log"
+    if ! $COMPOSER_CMD update "${UPDATE_TARGETS[@]}" "$UPDATE_FLAG" > "$UPDATE_LOG" 2>&1; then
+      cat "$UPDATE_LOG" >&2
+      FAILURE_REASON="$( summarise_composer_failure "$UPDATE_LOG" )"
+      record_failure "$PROJECT_LABEL" "${FAILURE_REASON:-composer update failed; see the CI log.}"
+      echo "Could not update $PROJECT_LABEL; recorded for the PR and skipping it."
       continue
-    }
+    fi
+    cat "$UPDATE_LOG" >&2
+    [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
+
+    ##
+    # The two cases where a run is allowed to cross a major boundary.
+    #
+    # A partial `composer update` can only move a package inside the constraint already in
+    # composer.json, so crossing a major means rewriting that constraint with
+    # `composer require`. Both cases below are ones where NOT crossing it is the worse
+    # outcome, and both are reported prominently in the PR body.
+    #
+    #   security mode  the advisory has no fix inside the current major: the module was
+    #                  never patched on the branch this site is pinned to, so a normal
+    #                  update is a no-op and the site stays vulnerable.
+    #
+    #   composer mode  the installed branch is unsupported (see select-packages-composer).
+    #                  An unsupported branch gets no further fixes of any kind, security
+    #                  included, so staying on it is not the safe choice it looks like.
+    #                  Drupal core is deliberately excluded: a core major is a planned
+    #                  project, not routine maintenance.
+    ##
+    MAJOR_UPGRADE_NOTE=""
+    ALLOW_MAJOR="no"
+    MAJOR_REASON=""
+    if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
+      ALLOW_MAJOR="yes"
+      MAJOR_REASON="No security fix was available within the previous major"
+    elif [ "$UPDATE_MODE" = "composer" ] && [ "$IS_CORE_GROUP" != "yes" ] && major_allowed "$PROJECT_LABEL"; then
+      ALLOW_MAJOR="yes"
+      MAJOR_REASON="$( major_allowed_reason "$PROJECT_LABEL" )"
+    fi
+    if [ "$ALLOW_MAJOR" = "yes" ]; then
+      LATEST="$( latest_available_version "$PROJECT_LABEL" )"
+      CURRENT="$( installed_version "$PROJECT_LABEL" )"
+      if [ -n "$LATEST" ] && [ "$LATEST" != "$CURRENT" ]; then
+        NEW_MAJOR="${LATEST%%.*}"
+        NEW_MAJOR="${NEW_MAJOR#v}"
+        echo "$PROJECT_LABEL needs a major upgrade at ${CURRENT:-unknown}: ${MAJOR_REASON}."
+        echo "Raising the constraint to ^${NEW_MAJOR}.0 and applying the major upgrade."
+        if [ "$IS_CORE_GROUP" = "yes" ]; then
+          # Raise every drupal/core* entry in composer.json together, or they end up split.
+          REQUIRE_ARGS=()
+          while IFS= read -r CORE_PKG; do
+            [ -n "$CORE_PKG" ] && REQUIRE_ARGS+=( "${CORE_PKG}:^${NEW_MAJOR}.0" )
+          done < <( jq -r '(.require // {}) | keys[]? | select(test("^drupal/core(-|$)"))' composer.json 2>/dev/null )
+        else
+          REQUIRE_ARGS=( "${PROJECT_LABEL}:^${NEW_MAJOR}.0" )
+        fi
+        if [ ${#REQUIRE_ARGS[@]} -gt 0 ] && $COMPOSER_CMD require "${REQUIRE_ARGS[@]}" --with-all-dependencies --no-interaction; then
+          [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
+          MAJOR_UPGRADE_NOTE="  - :rotating_light: **Major upgrade applied** (${CURRENT:-unknown} -> $( installed_version "$PROJECT_LABEL" )). ${MAJOR_REASON}, so the constraint in composer.json was raised to \`^${NEW_MAJOR}.0\`. Majors can contain breaking changes - review and test this one before merging."
+          if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
+            MAJOR_UPGRADE_NOTE+="\n  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
+          fi
+        else
+          echo "Could not raise $PROJECT_LABEL to ^${NEW_MAJOR}.0; leaving it as it is."
+          record_failure "$PROJECT_LABEL" "Needed a major upgrade to ^${NEW_MAJOR}.0 (${MAJOR_REASON}), but composer could not resolve it."
+        fi
+      elif [ -z "$LATEST" ]; then
+        record_failure "$PROJECT_LABEL" "Needed a major upgrade (${MAJOR_REASON}) but no newer release exists, so there is no automatic fix."
+      fi
+    fi
     # Check for any changes
     if [[ `git status --porcelain` ]]; then
         #committing recent changes.
         git add composer.*
-        git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT"
+        git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL"
 
         # Run the database updates this package brings with it and commit any configuration
         # they changed. Always exits 0; prints a Markdown summary for the PR body.
-        DB_SUMMARY=$( "$( pots_file apply-db-updates )" "$PROJECT" )
+        DB_SUMMARY=$( "$( pots_file apply-db-updates )" "$PROJECT_LABEL" )
         if [ -n "$DB_SUMMARY" ]; then
           CONFIG_CHANGES+="${DB_SUMMARY}\n"
         fi
 
         # Building PR information.
         # Remove prefix "drupal/" from the project name
-        AUX=${PROJECT//drupal\//''}
+        AUX=${PROJECT_LABEL//drupal\//''}
         PROJECTS_UPDATED+="${AUX}, "
-        if [[ "$PROJECT" != drupal/* ]]; then
+        if [ "$IS_CORE_GROUP" = "yes" ]; then
+          AUX="- Update [Drupal core](https://www.drupal.org/project/drupal/releases) (\`drupal/core-*\`, updated as one group)."
+        elif [[ "$PROJECT_LABEL" != drupal/* ]]; then
           # Not a Drupal project, so there is no drupal.org release page to link.
-          AUX="- Update [${PROJECT}](https://packagist.org/packages/${PROJECT})."
+          AUX="- Update [${PROJECT_LABEL}](https://packagist.org/packages/${PROJECT_LABEL})."
         elif [ $AUX == 'core' ] || [ $AUX == 'core-recommended' ] || [ $AUX == 'core-composer-scaffold' ]; then
-          AUX="- Update [${PROJECT}](https://www.drupal.org/project/drupal/releases)."
+          AUX="- Update [${PROJECT_LABEL}](https://www.drupal.org/project/drupal/releases)."
         else
-          AUX="- Update the contrib module: [${PROJECT}](https://www.drupal.org/project/${AUX}/releases)."
+          AUX="- Update the contrib module: [${PROJECT_LABEL}](https://www.drupal.org/project/${AUX}/releases)."
         fi
         MESSAGE+="${AUX}\n"
+        # Flag a crossed major boundary directly under the package it applies to.
+        if [ -n "$MAJOR_UPGRADE_NOTE" ]; then
+          MESSAGE+="${MAJOR_UPGRADE_NOTE}\n"
+        fi
         # AI-generated testing steps (optional). A failure here must never abort the
         # update run, so the call is non-fatal and we only append when it returned text.
         if [ -n "${OPENAI_API_KEY}" ]; then
           if [ "$UPDATE_MODE" = "security" ]; then
-            PROMPT_TEXT="I am updating the following drupal project: $PROJECT, because a security update, could you give me functional testing instructions for it?"
+            PROMPT_TEXT="I am updating the following drupal project: $PROJECT_LABEL, because a security update, could you give me functional testing instructions for it?"
           else
-            PROMPT_TEXT="I am applying a routine minor update to the following drupal project: $PROJECT, could you give me functional testing instructions for it?"
+            PROMPT_TEXT="I am applying a routine minor update to the following drupal project: $PROJECT_LABEL, could you give me functional testing instructions for it?"
           fi
           # Tell the model what the update actually did, so the steps target the areas that
           # changed instead of being generic.
@@ -179,11 +391,11 @@ if [ -n "$PACKAGES" ]; then
           fi
           OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT" || true)
           if [ -n "$OPENAI_RESPONSE" ]; then
-            TEST_STEPS+="### AI testing instructions for the project ${PROJECT}:\n"
+            TEST_STEPS+="### AI testing instructions for the project ${PROJECT_LABEL}:\n"
             TEST_STEPS+="${OPENAI_RESPONSE}\n"
           fi
         fi
-        echo "Updated $PROJECT"
+        echo "Updated $PROJECT_LABEL"
         echo "---------------"
     fi
   done <<< "$PACKAGES"
@@ -220,6 +432,26 @@ if [ -n "$PACKAGES" ]; then
     if [ -z "$BLOCKED_UPDATES" ]; then
       BLOCKED_UPDATES="_None._"
     fi
+
+    # Packages that could not be updated. Two renderings of the same list: Markdown for
+    # the PR body, and a plain-text version for the ticket, whose description is read by
+    # someone who is not looking at composer output.
+    FAILED_UPDATES=""
+    FAILED_PLAIN=""
+    if [ -s "$UPDATE_STATE_DIR/failed" ]; then
+      while IFS=$'\t' read -r FNAME FREASON; do
+        [ -z "$FNAME" ] && continue
+        FAILED_UPDATES+="- :x: \`${FNAME}\` - ${FREASON}\n"
+        FAILED_PLAIN+="- ${FNAME}: ${FREASON}\n"
+      done < "$UPDATE_STATE_DIR/failed"
+    fi
+    if [ -z "$FAILED_UPDATES" ]; then
+      FAILED_UPDATES="_None._"
+      FAILED_PLAIN="None."
+    else
+      echo "Some packages could not be updated; they are reported in the PR and the ticket."
+    fi
+    export UPDATE_FAILURES="$FAILED_PLAIN"
 
     if [ -z "$CONFIG_CHANGES" ]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
@@ -260,6 +492,7 @@ if [ -n "$PACKAGES" ]; then
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
     BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
     BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
+    BODY=${BODY//\[FAILED_UPDATES\]/$FAILED_UPDATES}
     BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
     BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
     if [ ! -z "$SITE_NAME" ]; then

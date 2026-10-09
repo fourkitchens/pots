@@ -67,6 +67,20 @@ PR_BODY_MESSAGE=$(cat "$TEMPLATE")
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
 PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
 
+# Packages the run could not update, passed in by run-update as UPDATE_FAILURES (one
+# "- name: reason" line each, "None." when there were none). The whole block is dropped
+# when nothing failed: a client-facing ticket should not carry an empty "problems" heading.
+if [ -n "${UPDATE_FAILURES:-}" ] && [ "${UPDATE_FAILURES}" != "None." ]; then
+  # The trailing blank line matters: it keeps this its own paragraph instead of running
+  # into the closing sentence (command substitution eats the newline printf emits).
+  FAILURES_TEXT="Could not be updated automatically and need a look by hand:
+$( printf '%b' "${UPDATE_FAILURES}" )
+"
+else
+  FAILURES_TEXT=""
+fi
+PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[FAILURES\]/$FAILURES_TEXT}
+
 # Productive renders the task description as HTML, so the template's blank lines and
 # single newlines collapse into one run-on paragraph. Turn blank-line-separated blocks
 # into <p> and the newlines inside a block into <br>. HTML metacharacters are escaped

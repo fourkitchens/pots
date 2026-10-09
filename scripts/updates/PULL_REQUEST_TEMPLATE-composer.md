@@ -13,6 +13,9 @@ person to plan and test it.
 
 [BLOCKED_UPDATES]
 
+### Updates that could not be applied:
+[FAILED_UPDATES]
+
 ### Database updates and configuration changes:
 [CONFIG_CHANGES]
 

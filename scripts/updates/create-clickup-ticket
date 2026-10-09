@@ -60,6 +60,20 @@ fi
 CU_BODY_MESSAGE=$(cat "$TEMPLATE")
 CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
 CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
+
+# Packages the run could not update, passed in by run-update as UPDATE_FAILURES (one
+# "- name: reason" line each, "None." when there were none). The whole block is dropped
+# when nothing failed: a client-facing ticket should not carry an empty "problems" heading.
+if [ -n "${UPDATE_FAILURES:-}" ] && [ "${UPDATE_FAILURES}" != "None." ]; then
+  # The trailing blank line matters: it keeps this its own paragraph instead of running
+  # into the closing sentence (command substitution eats the newline printf emits).
+  FAILURES_TEXT="Could not be updated automatically and need a look by hand:
+$( printf '%b' "${UPDATE_FAILURES}" )
+"
+else
+  FAILURES_TEXT=""
+fi
+CU_BODY_MESSAGE=${CU_BODY_MESSAGE//\[FAILURES\]/$FAILURES_TEXT}
 if [ "${UPDATE_MODE:-security}" = "composer" ]; then
   CU_TICKET_TITLE="Maintenance Updates For Your Website - ${SITE_NAME}"
 else
