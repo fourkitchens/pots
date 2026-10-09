@@ -189,6 +189,38 @@ major_allowed_reason() {
 }
 
 
+# Which ticketing system to open the ticket in, in order of precedence:
+#
+#   1. ticketing_system in the update-data blob -- the trigger POST, so whoever owns the
+#      trigger can move a project between systems without touching project settings. It
+#      sits with the rest of the ticketing configuration it selects between.
+#   2. the TICKETING_SYSTEM env var -- kept so projects configured before this moved into
+#      the POST keep working untouched.
+#   3. productive, the default.
+#
+# UPDATE_DATA defaults to the literal "{}" and is operator-supplied, so validate it before
+# parsing, exactly as the ticket scripts do with their own keys.
+resolve_ticketing_system() {
+  local from_blob=""
+  if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] \
+     && printf '%s' "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+    from_blob="$( printf '%s' "$UPDATE_DATA" | jq -r '.ticketing_system // empty' )"
+  fi
+  printf '%s' "${from_blob:-${TICKETING_SYSTEM:-productive}}"
+}
+
+# True when nothing actually asked for a ticketing system and we fell back to the default.
+# Worth knowing, because a default that silently cannot work is the one case where no
+# ticket appears and nothing says why.
+ticketing_system_was_defaulted() {
+  local from_blob=""
+  if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] \
+     && printf '%s' "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+    from_blob="$( printf '%s' "$UPDATE_DATA" | jq -r '.ticketing_system // empty' )"
+  fi
+  [ -z "$from_blob" ] && [ -z "${TICKETING_SYSTEM:-}" ]
+}
+
 # Is this package still covered by a security advisory, with whatever is installed now?
 package_still_vulnerable() {
   local pkg="$1"
@@ -703,15 +735,31 @@ if [ -n "$PACKAGES" ]; then
     # unconfigured or its API call fails) and always exits 0, so ticketing can never fail
     # the security PR.
     #
-    # TICKETING_SYSTEM is a CircleCI project env var, so moving a project from ClickUp to
-    # Productive is a one-click change that leaves its trigger POST alone.
+    # The provider comes from ticketing_system in the update-data blob, falling back to
+    # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
+    # with two separate defaults is how the two halves drift apart.
     TICKET_URL=""
-    case "${TICKETING_SYSTEM:-clickup}" in
+    TICKETING="$( resolve_ticketing_system )"
+    echo "Ticketing system: ${TICKETING}"
+    case "$TICKETING" in
       none)
-        echo "Ticketing is disabled (TICKETING_SYSTEM=none)."
+        echo "Ticketing is disabled (ticketing_system=none)."
         ;;
       clickup|productive)
-        TICKET_SCRIPT=$( pots_file "create-${TICKETING_SYSTEM:-clickup}-ticket" )
+        # A default nobody chose, with no token behind it, would otherwise skip ticketing
+        # in complete silence -- the provider scripts exit 0 by design so they can never
+        # fail the PR. Say so in the job log and in the PR.
+        if ticketing_system_was_defaulted; then
+          TICKET_TOKEN_VAR="CU_TOKEN"
+          [ "$TICKETING" = "productive" ] && TICKET_TOKEN_VAR="PRODUCTIVE_TOKEN"
+          eval "TICKET_TOKEN=\${${TICKET_TOKEN_VAR}:-}"
+          if [ -z "$TICKET_TOKEN" ]; then
+            echo "WARNING: no ticketing system was specified and the default (${TICKETING}) has no ${TICKET_TOKEN_VAR}; no ticket will be created." >&2
+            printf '%s\n' "No ticketing system was specified in update-data or TICKETING_SYSTEM, so the default (${TICKETING}) was used - but ${TICKET_TOKEN_VAR} is not set, so no ticket was created. Set ticketing_system in the trigger POST, or add the token." \
+              >> "$UPDATE_STATE_DIR/notes"
+          fi
+        fi
+        TICKET_SCRIPT=$( pots_file "create-${TICKETING}-ticket" )
         if [ -x "$TICKET_SCRIPT" ]; then
           TICKET_URL=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" || true)
         else
@@ -719,7 +767,7 @@ if [ -n "$PACKAGES" ]; then
         fi
         ;;
       *)
-        echo "Unknown TICKETING_SYSTEM '${TICKETING_SYSTEM}' (expected clickup, productive or none); skipping ticketing."
+        echo "Unknown ticketing system '${TICKETING}' (expected clickup, productive or none); skipping ticketing."
         ;;
     esac
 

@@ -29,7 +29,9 @@ parameters:
     description: >
       JSON blob of the non-secret ticketing settings for the AutoSec ticket, set by the
       same external POST that triggers run-sec-updates-check. Which keys matter depends on
-      TICKETING_SYSTEM (a CircleCI env var: clickup, productive, or none).
+      ticketing_system.
+        any:        ticketing_system - clickup, productive or none. Falls back to the
+                    TICKETING_SYSTEM env var, then to productive.
         clickup:    list_id, client_id, status (optional)
         productive: organization_id, project_id, task_list_id (optional),
                     board_id (optional), workflow_status_id (optional),
@@ -130,14 +132,16 @@ env: &env
   #
   # PRODUCTIVE_TOKEN: 12345678-abcd-...
 
-  # Which ticketing system AutoSec opens a ticket in. Set it per project in the CircleCI
-  # UI, so migrating a project from ClickUp to Productive is a one-click change and its
-  # trigger POST never has to be touched.
+  # Which ticketing system AutoSec opens a ticket in. This is the FALLBACK: the trigger
+  # POST decides, via the ticketing_system key in update-data, and only when that key is
+  # absent is this env var consulted. Set it here for a project whose trigger you do not
+  # control; otherwise put ticketing_system in the POST, next to the settings it selects
+  # between.
   #
   # Possible values: clickup, productive, none
-  # Default: clickup
+  # Default when neither the POST nor this var says otherwise: productive
   #
-  # TICKETING_SYSTEM: productive
+  # TICKETING_SYSTEM: clickup
 
   # Optional: OpenAI model used for AutoSec's AI testing-step generation.
   # Defaults to gpt-4o-mini when unset.
@@ -481,8 +485,8 @@ jobs:
       <<: *env
       TZ: /usr/share/zoneinfo/<< pipeline.parameters.tz >>
       TERM: dumb
-      # Ticketing settings for the AutoSec ticket, unpacked by the provider script
-      # selected by TICKETING_SYSTEM.
+      # Ticketing settings for the AutoSec ticket. Its ticketing_system key picks the
+      # provider; the rest is unpacked by that provider's script.
       UPDATE_DATA: << pipeline.parameters.update-data >>
     steps:
       - run:

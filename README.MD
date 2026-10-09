@@ -124,7 +124,7 @@ prefix. Rename any you have set in CircleCI:
 ### BREAKING: `click-data` is now `update-data`
 
 AutoSec's ticketing configuration used one pipeline parameter per provider. That is now a
-single `update-data` blob, with the provider chosen by a `TICKETING_SYSTEM` env var.
+single `update-data` blob, with the provider chosen by its `ticketing_system` key.
 **`click-data` no longer exists.**
 
 This one needs care, because CircleCI **fails any pipeline that receives a parameter the
@@ -146,14 +146,16 @@ Rename the parameter in your Evercurrent (or CircleCI triggers UI) POST body:
    "parameters": {
      "run-sec-updates-check": true,
 -    "click-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
-+    "update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
++    "update-data": "{\"ticketing_system\":\"clickup\",\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
    }
  }
 ```
 
-The ClickUp keys inside the blob are unchanged, and `CU_TOKEN` stays exactly as it is, so
-for a project staying on ClickUp this is purely the rename above: `TICKETING_SYSTEM`
-defaults to `clickup` when unset. Moving a project to Productive is then a separate,
+The ClickUp keys inside the blob are unchanged and `CU_TOKEN` stays exactly as it is, but
+a project staying on ClickUp now has to say so: add `"ticketing_system":"clickup"` to the
+blob, or set the `TICKETING_SYSTEM` env var. The default is **`productive`**, so a blob
+that says nothing will try Productive, find no `PRODUCTIVE_TOKEN`, and create no ticket —
+the run logs a warning and the PR carries a note, but the PR itself still succeeds. Moving a project to Productive is then a separate,
 independent step — see
 [Steps to set the Productive.io integration](#steps-to-set-the-productiveio-integration-optional).
 
@@ -494,11 +496,12 @@ A JSON blob of the non-secret ticketing settings for the AutoSec ticket, sent by
 external POST that sets `run-sec-updates-check`. Defaults to `"{}"`, which disables
 ticketing.
 
-Which keys matter depends on `TICKETING_SYSTEM` (a CircleCI project env var, not a
-parameter), because only one ticketing system is ever active for a project:
+Which keys matter depends on `ticketing_system`, because only one ticketing system is
+ever active for a run:
 
 | key                  | used by    | required | value                                                       |
 | -------------------- | ---------- | -------- | ----------------------------------------------------------- |
+| `ticketing_system`   | any        | no       | `clickup`, `productive` or `none`. Falls back to the `TICKETING_SYSTEM` env var, then to `productive` |
 | `list_id`            | clickup    | yes      | ClickUp list the task is created in                          |
 | `client_id`          | clickup    | yes      | value for the "Client" custom field (a drop-down option UUID)|
 | `status`             | clickup    | no       | a status **name** on the list                                |
@@ -786,11 +789,12 @@ All optional — every one of these has a working default. See
 * `UPDATE_EXCLUDE`: Space-separated globs of packages to hold back from the routine update,
    e.g. `"drupal/core-* symfony/*"`. Lets a project skip a package without editing its
    version constraints.
-* `TICKETING_SYSTEM`: Which ticketing system AutoSec opens a ticket in. One of `clickup`
-   (the default when unset), `productive`, or `none`. It is an env var rather than a
-   pipeline parameter on purpose: migrating a project from ClickUp to Productive is then a
-   one-click change in Project Settings, and its trigger POST never has to be touched. An
-   unrecognised value logs a warning and skips ticketing; it never fails the PR.
+* `TICKETING_SYSTEM`: Fallback for which ticketing system AutoSec opens a ticket in. One
+   of `clickup`, `productive`, or `none`. The trigger POST decides this now, through the
+   `ticketing_system` key in `update-data`; this env var is only consulted when that key
+   is absent, and when neither says anything the default is **`productive`**. Set it for a
+   project whose trigger you do not control. An unrecognised value logs a warning and skips
+   ticketing; it never fails the PR.
 * `OPENAI_API_KEY`: Key for an OpenAI-compatible API used to generate functional testing
    steps. When unset, the AI step is skipped entirely and the PR is created without it.
 * `OPENAI_API_BASE`: Root of the OpenAI-compatible API. Defaults to
@@ -962,7 +966,9 @@ so they can be set per-trigger without touching config:
 1. **Token** — add a CircleCI project env var `CU_TOKEN` with your ClickUp API token
    (`Project Settings -> Environment Variables`). Kept out of `update-data` because
    pipeline parameters are readable via the CircleCI API/UI.
-2. **`TICKETING_SYSTEM`** — leave it unset, or set it to `clickup` to be explicit.
+2. **`ticketing_system`** — set it to `clickup` in the `update-data` blob. This is no
+   longer optional: the default is now `productive`, so a ClickUp project that says
+   nothing gets no ticket.
 3. **`update-data`** — the external trigger POST that sets `run-sec-updates-check` also
    sends `update-data`, a JSON object with these keys:
 
@@ -1003,19 +1009,20 @@ found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
 Four Kitchens is moving from ClickUp to Productive, so AutoSec ships both and switching is
 a configuration change rather than a code change.
 
-**Migrating a project** is one value: set the `TICKETING_SYSTEM` env var to `productive` in
-`Project Settings -> Environment Variables`. The trigger POST does not change — only the
-contents of `update-data` do, since the two systems read different keys out of it.
+**Migrating a project** is one key in the trigger POST: set `ticketing_system` to
+`productive` inside `update-data`. The other keys in the blob change with it, since the two
+systems read different ones out of it.
 
-| `TICKETING_SYSTEM` | Result |
+| `ticketing_system` | Result |
 | --- | --- |
-| unset or `clickup` | ClickUp ticket — today's behaviour |
-| `productive`       | Productive task |
-| `none`             | no ticket; the PR is still created |
-| anything else      | warning logged, ticketing skipped; the PR is still created |
+| `clickup`            | ClickUp ticket |
+| `productive`, or absent with no `TICKETING_SYSTEM` set | Productive task |
+| `none`               | no ticket; the PR is still created |
+| anything else        | warning logged, ticketing skipped; the PR is still created |
 
-Migration is therefore per project and reversible: flip the env var back and the next run
-uses ClickUp again.
+Resolution order is `ticketing_system` in `update-data`, then the `TICKETING_SYSTEM` env
+var, then `productive`. Migration is per trigger and reversible: change the key back and
+the next run uses ClickUp again.
 
 **Setup.** Exactly like ClickUp: the API token is a CircleCI secret, everything else travels
 in `update-data` so it can be set per-trigger.
@@ -1023,7 +1030,8 @@ in `update-data` so it can be set per-trigger.
 1. **Token** — add a CircleCI project env var `PRODUCTIVE_TOKEN`
    (`Project Settings -> Environment Variables`). Kept out of `update-data` because
    pipeline parameters are readable via the CircleCI API/UI.
-2. **`TICKETING_SYSTEM`** — set it to `productive`.
+2. **`ticketing_system`** — set it to `productive` in the `update-data` blob, or leave
+   it out: `productive` is the default.
 3. **`update-data`** — the external trigger POST that sets `run-sec-updates-check` also
    sends `update-data`. Productive reads these keys from it:
 
@@ -1235,7 +1243,7 @@ Trigger it with its own POST, exactly like AutoSec:
 {
   "parameters": {
     "run-composer-updates-check": true,
-    "update-data": "{\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
+    "update-data": "{\"ticketing_system\":\"clickup\",\"list_id\":\"901...\",\"client_id\":\"<uuid>\"}"
   }
 }
 ```
@@ -1266,6 +1274,40 @@ newest 10.x — not to 11.x. Majors that exist but were skipped are listed in th
 silently dropped.
 
 `UPDATE_LEVEL=patch` narrows it further. `UPDATE_EXCLUDE` holds specific packages back.
+
+#### The two exceptions, and the rule that guards them
+
+Two situations are worse if a major is *not* taken, so a major can be applied — but only
+under one hard rule.
+
+| situation | mode |
+| --- | --- |
+| The advisory has no fix inside the installed major: the module was never patched on the branch this site pins | security |
+| The installed branch is unsupported on drupal.org, so it will never receive another release of any kind | composer |
+
+**The rule: a major is applied only when nothing newer remains inside the installed
+major, and then exactly one major at a time.** Remaining majors stay in the PR's "Major
+upgrades available but not applied" section for a person.
+
+"Nothing newer remains" is answered from what the package has actually *published*, not
+from what Composer currently offers — the two differ, and conflating them is how an
+environment problem turns into an unwanted major upgrade. When a newer in-major release
+exists but the run cannot reach it, the PR says which of these is in the way:
+
+- the constraint in `composer.json` is tighter than the major → it is widened to
+  `^MAJOR.0`, never past it;
+- the constraint already allows it but the dependency graph pins it → reported with
+  `composer why-not` output, and `composer.json` is left alone;
+- `config.platform.php` blocks it → reported, with the instruction to raise the platform
+  php (and the CI `php-version` with it) rather than cross a major.
+
+**Drupal core never crosses a major automatically**, in either mode. A core major is a
+planned project. When a core advisory has no fix left in the installed major, the run says
+so in the PR and the ticket and leaves the site where it is, rather than taking the
+decision on its own.
+
+Set `UPDATE_ALLOW_UNSUPPORTED_MAJORS=NO` to switch the composer-mode exception off
+entirely.
 
 ### Why packages are updated one at a time
 
