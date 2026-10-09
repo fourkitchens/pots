@@ -10,8 +10,9 @@
 # definition and normally need a human to plan and test them, so they are reported rather
 # than applied. The exception is a package whose installed branch is UNSUPPORTED: it will
 # never receive another release, security fixes included, so holding it there is not the
-# safe option it appears to be. Those are listed in $UPDATE_STATE_DIR/allow-major and
-# run-update raises their constraints. Drupal core is never in that set.
+# safe option it appears to be. Those are listed in $UPDATE_STATE_DIR/allow-major; being
+# listed only makes a package eligible, and run-update still refuses to cross a major
+# while anything newer remains inside the installed one. Drupal core is never in that set.
 #
 # The minor-only restriction is enforced by Composer's own semver logic rather than by
 # parsing version strings here:
@@ -44,8 +45,12 @@
 #                              is NOT being applied, so run-update can report them in the
 #                              PR as needing a human
 #   $UPDATE_STATE_DIR/allow-major
-#                              "name<TAB>reason" for each unsupported package whose major
-#                              run-update should apply
+#                              "name<TAB>reason<TAB>version-at-selection" for each
+#                              unsupported package whose major run-update MAY apply.
+#                              Being listed only makes a package eligible: run-update
+#                              still refuses to cross a major while anything newer
+#                              remains inside the installed one, and then steps exactly
+#                              one major. Column 3 is informational, never a target.
 #   stderr                     human-readable logging
 #
 # Always exits 0: "nothing to update" is a normal outcome.
@@ -146,8 +151,13 @@ if [ "${UPDATE_ALLOW_UNSUPPORTED_MAJORS:-YES}" != "NO" ] && [ -s "$STATE_DIR/blo
       REASON="Its installed branch ($CURRENT) is no longer supported on drupal.org"
     fi
     if [ -n "$REASON" ]; then
-      log "$NAME is unsupported at $CURRENT; allowing the major upgrade to $LATEST."
-      printf '%s\t%s\n' "$NAME" "$REASON" >> "$STATE_DIR/allow-major"
+      log "$NAME is unsupported at $CURRENT; run-update will step one major at a time."
+      # Column 3 is the version installed when the selection was made, and it is
+      # informational only. Deliberately NOT $LATEST: that comes from --major-only,
+      # which reports the NEWEST major, and handing run-update that number would
+      # re-create the bug this rule exists to prevent. run-update works out its own
+      # target with next_major_after, after checking the current major is exhausted.
+      printf '%s\t%s\t%s\n' "$NAME" "$REASON" "$CURRENT" >> "$STATE_DIR/allow-major"
     fi
   done < "$STATE_DIR/blocked"
 fi

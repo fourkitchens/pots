@@ -5,13 +5,15 @@
 #
 # Usage: run-update [security|composer]
 #
-#   security  (default) update packages with known security advisories. When an advisory
-#                       has no fix inside the package's current major, the constraint is
-#                       raised and the major is applied: staying vulnerable is worse.
-#   composer            routine MINOR updates - minor and patch releases. A major is
-#                       applied only for a package whose installed branch is unsupported
-#                       (it would otherwise never receive another fix); every other major
-#                       is reported in the PR body instead of applied.
+#   security  (default) update packages with known security advisories.
+#   composer            routine MINOR updates - minor and patch releases.
+#
+# Major versions. A major is applied ONLY when there is nothing left to move to inside the
+# major that is installed, and then only one major at a time. Whatever remains above that
+# is reported in the PR instead of applied. Drupal core never crosses a major
+# automatically in either mode: that is a planned upgrade, not an automated one. A package
+# becomes a candidate when it is still flagged by `composer audit` after the normal update
+# (security mode) or when its installed branch is unsupported (composer mode).
 #
 # Drupal core is always updated as one group, `composer update "drupal/core-*"
 # --with-all-dependencies`, in both modes: its packages are released in lockstep and must
@@ -186,6 +188,7 @@ major_allowed_reason() {
   awk -F'\t' -v p="$1" '$1 == p { print $2; exit }' "$UPDATE_STATE_DIR/allow-major" 2>/dev/null
 }
 
+
 # Is this package still covered by a security advisory, with whatever is installed now?
 package_still_vulnerable() {
   local pkg="$1"
@@ -193,17 +196,189 @@ package_still_vulnerable() {
     | jq -e --arg p "$pkg" '(.advisories // {}) | has($p)' >/dev/null 2>&1
 }
 
-# Newest release composer knows about for a package, ignoring the project's constraints.
-latest_available_version() {
+# ---------------------------------------------------------------------------
+# Version strings.
+#
+# Composer, packagist and drupal.org disagree about a leading "v", and a package
+# installed from a branch reports as "dev-main 9542d5a" -- version and sha, with a
+# space. Nothing is compared, split or parsed before it has been through here.
+# ---------------------------------------------------------------------------
+normalise_version() {
+  local v="${1%% *}"
+  printf '%s' "${v#v}"
+}
+
+# A version this script is willing to reason about. A branch alias is not something
+# semver logic can answer questions about, and guessing a major out of one is how a
+# site ends up on the wrong version.
+is_release_version() {
+  normalise_version "$1" | grep -qE '^[0-9]+(\.[0-9]+){1,3}$'
+}
+
+major_of() {
+  local v
+  v="$( normalise_version "$1" )"
+  printf '%s' "${v%%.*}"
+}
+
+# True when $1 is strictly newer than $2. Field-by-field numeric, never a string
+# compare: as strings "10.2.6" sorts below "9.5.0".
+version_gt() {
+  local a b
+  a="$( normalise_version "$1" )"; b="$( normalise_version "$2" )"
+  [ -n "$a" ] || return 1
+  [ "$a" = "$b" ] && return 1
+  [ "$( printf '%s\n%s\n' "$a" "$b" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -n 1 )" = "$a" ]
+}
+
+# Collapse free text to one safe field. record_failure writes "name<TAB>reason" and
+# the PR renderer reads it back with IFS=$'\t', so a tab or newline in a reason
+# silently truncates the report.
+oneline() {
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -s ' ' | cut -c1-600 | sed 's/[[:space:]]*$//'
+}
+
+# ---------------------------------------------------------------------------
+# `composer outdated` has two output shapes and the difference is easy to miss.
+# Given an EXACT package name it prints a bare package object -- a top-level
+# "latest", and no "latest-status" at all. Given a wildcard it prints
+# {"installed":[...]} with "latest-status" on every entry. Reading only the
+# envelope is what made this whole escalation path a silent no-op; reading only
+# the bare object throws away latest-status, which is the field that says whether
+# composer.json is what is holding a package back.
+#
+# So: append "*" to force list mode, then select the exact name back out.
+#
+#   --minor-only   "latest" is the newest installable release in the SAME major
+#   --all          the package is listed even when it is already up to date
+#   latest-status  up-to-date | semver-safe-update | update-possible
+#
+# Prints "latest<TAB>latest-status"; empty when composer knows nothing about it.
+# ---------------------------------------------------------------------------
+outdated_entry() {                      # $1 package, $2.. extra composer flags
   local pkg="$1"
-  composer outdated "$pkg" --all --format=json 2>/dev/null \
-    | jq -r --arg p "$pkg" '.installed[]? | select(.name == $p) | .latest // empty' \
+  shift
+  $COMPOSER_CMD outdated "${pkg}*" --format=json "$@" 2>/dev/null \
+    | jq -r --arg p "$pkg" '
+        .installed[]? | select(.name == $p)
+        | "\(.latest // "")\t\(.["latest-status"] // "")"' \
     | head -n 1
+}
+
+# Highest release composer would actually install inside the current major, plus
+# whether composer.json allows it. Sets IN_MAJOR and IN_MAJOR_STATUS.
+read_in_major() {
+  local line
+  line="$( outdated_entry "$1" --minor-only --all )"
+  IN_MAJOR="$( normalise_version "$( printf '%s' "$line" | cut -f1 )" )"
+  IN_MAJOR_STATUS="$( printf '%s' "$line" | cut -f2 )"
+}
+
+# The same question with the project's platform requirements lifted. When this
+# answers and read_in_major does not, config.platform is the blocker -- and the
+# fix for that is to raise the platform, never to cross a major.
+in_major_ignoring_platform() {
+  normalise_version "$( outdated_entry "$1" --minor-only --all --ignore-platform-reqs | cut -f1 )"
+}
+
+# Every stable release this package has published. Deliberately ignores both the
+# project's constraints and the platform: this answers "what exists", not "what is
+# installable", and keeping those apart is the whole point of the fix. Pre-releases
+# are filtered out -- a 2.0.0-beta1 is not an upgrade target, and counting it would
+# make a major look available when it is not.
+published_releases() {
+  $COMPOSER_CMD show "$1" --all --format=json 2>/dev/null \
+    | jq -r '.versions[]? // empty' \
+    | grep -E '^v?[0-9]+(\.[0-9]+){1,3}$' \
+    | sed 's/^v//'
+}
+
+available_majors() {
+  published_releases "$1" | awk -F. '{ print $1 }' | sort -u -n
+}
+
+# Highest release published inside one major. This is what tells "this major is
+# exhausted" apart from "this major has more to give but this project cannot reach
+# it" -- the distinction the reported bug turned on.
+highest_published_in_major() {
+  published_releases "$1" \
+    | awk -F. -v m="$2" '$1 + 0 == m + 0' \
+    | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n \
+    | tail -n 1
+}
+
+# The NEXT major after the installed one, never the newest.
+next_major_after() {
+  available_majors "$1" | awk -v c="$2" '$1 + 0 > c + 0 { print $1; exit }'
 }
 
 installed_version() {
   local pkg="$1"
-  composer show "$pkg" --format=json 2>/dev/null | jq -r '.versions[0] // empty' | head -n 1
+  $COMPOSER_CMD show "$pkg" --format=json 2>/dev/null | jq -r '.versions[0] // empty' | head -n 1
+}
+
+# Composer's own explanation of why a version will not install, boiled down to one
+# PR-sized line. Purely diagnostic: it never gates a decision.
+why_not_summary() {
+  oneline "$( $COMPOSER_CMD why-not "$1" "$2" --no-interaction 2>/dev/null \
+    | grep -v 'Not finding what you were looking for' \
+    | sed 's/[[:space:]]\{2,\}/ /g' | sed '/^$/d' | head -n 4 )"
+}
+
+# Every drupal/core* constraint in composer.json as "section<TAB>name". require-dev
+# matters: drupal/core-dev lives there, and raising it without --dev would move it
+# into require.
+core_constraint_entries() {
+  jq -r '
+    [ (.require // {} | keys[]? | {s: "require", n: .}),
+      (.["require-dev"] // {} | keys[]? | {s: "require-dev", n: .}) ]
+    | .[] | select(.n | test("^drupal/core(-|$)")) | "\(.s)\t\(.n)"' \
+    composer.json 2>/dev/null
+}
+
+# Rewrite the constraint for a package -- or for the whole core group -- to a given
+# major. Leaves composer's output in $RAISE_LOG and returns composer's exit code.
+#
+# The core group is raised as one set, from what composer.json actually declares:
+# requiring "drupal/core" by name would add a root dependency the project never had
+# (this site requires core-recommended, not core), and raising only some of the set
+# splits it across versions. require-dev entries are raised with --dev, and only
+# when installed: CI runs `composer install --no-dev`, so requiring an absent one
+# would fail the run over a package that is not even there.
+raise_constraint_to_major() {           # $1 label, $2 major
+  local label="$1" major="$2" rc=0 section name
+  local prod=() dev=()
+  RAISE_LOG="$UPDATE_STATE_DIR/raise-$( printf '%s' "$label" | tr '/*' '--' ).log"
+  : > "$RAISE_LOG"
+  if [ "$IS_CORE_GROUP" = "yes" ]; then
+    while IFS=$'\t' read -r section name; do
+      [ -z "$name" ] && continue
+      if [ "$section" = "require-dev" ]; then
+        if [ -n "$( installed_version "$name" )" ]; then
+          dev+=( "${name}:^${major}.0" )
+        else
+          printf '%s\n' "$name is in require-dev at an older constraint and is not installed in CI, so it was left alone; raise it to ^${major}.0 by hand." \
+            >> "$UPDATE_STATE_DIR/notes"
+        fi
+      else
+        prod+=( "${name}:^${major}.0" )
+      fi
+    done < <( core_constraint_entries )
+  else
+    prod=( "${label}:^${major}.0" )
+  fi
+  if [ ${#prod[@]} -eq 0 ] && [ ${#dev[@]} -eq 0 ]; then
+    printf '%s\n' "No composer.json constraint found for ${label}." >> "$RAISE_LOG"
+    return 1
+  fi
+  if [ ${#prod[@]} -gt 0 ]; then
+    $COMPOSER_CMD require "${prod[@]}" --with-all-dependencies --no-interaction >> "$RAISE_LOG" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -eq 0 ] && [ ${#dev[@]} -gt 0 ]; then
+    $COMPOSER_CMD require --dev "${dev[@]}" --with-all-dependencies --no-interaction >> "$RAISE_LOG" 2>&1 || rc=$?
+  fi
+  cat "$RAISE_LOG" >&2
+  return "$rc"
 }
 
  # Only do any work when the selector actually found something.
@@ -261,7 +436,6 @@ if [ -n "$PACKAGES" ]; then
     fi
     echo "Updating $PROJECT_LABEL"
     echo "-----------------"
-    VERSION_BEFORE="$( installed_version "$PROJECT_LABEL" )"
     # Core moves as a set, so it needs --with-all-dependencies; a single package is kept to
     # --with-dependencies, which is the narrower, more predictable partial update.
     if [ "$IS_CORE_GROUP" = "yes" ]; then
@@ -285,62 +459,129 @@ if [ -n "$PACKAGES" ]; then
     [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
 
     ##
-    # The two cases where a run is allowed to cross a major boundary.
+    # Crossing a major version boundary.
     #
-    # A partial `composer update` can only move a package inside the constraint already in
-    # composer.json, so crossing a major means rewriting that constraint with
-    # `composer require`. Both cases below are ones where NOT crossing it is the worse
-    # outcome, and both are reported prominently in the PR body.
+    # THE RULE: a major is applied only when there is no valid version left inside the
+    # major that is currently installed. A partial `composer update` can only move a
+    # package within the constraint already in composer.json, so crossing a major means
+    # rewriting that constraint with `composer require` -- and doing that while, say,
+    # 10.6.18 was still available under a "~10.1" constraint is how a site ends up on
+    # Drupal 11 when it should have moved to the newest Drupal 10.
     #
-    #   security mode  the advisory has no fix inside the current major: the module was
-    #                  never patched on the branch this site is pinned to, so a normal
-    #                  update is a no-op and the site stays vulnerable.
+    # Three rules, in order:
     #
-    #   composer mode  the installed branch is unsupported (see select-packages-composer).
-    #                  An unsupported branch gets no further fixes of any kind, security
-    #                  included, so staying on it is not the safe choice it looks like.
-    #                  Drupal core is deliberately excluded: a core major is a planned
-    #                  project, not routine maintenance.
+    #   1. If a newer release exists inside the installed major, that is the target and
+    #      no major is even considered. This is checked FIRST, core included.
+    #   2. Drupal core never crosses a major automatically, in either mode. Once its
+    #      major is exhausted it is reported for a human, not upgraded.
+    #   3. For everything else, once the major is exhausted, step to the NEXT major --
+    #      not the newest. One set of breaking changes per PR; the rest stays reported.
+    #
+    # What makes a package a candidate at all:
+    #
+    #   security mode  it is still flagged by `composer audit` after the normal update.
+    #   composer mode  its installed branch is unsupported (see select-packages-composer),
+    #                  so it will never receive another release of any kind.
     ##
     MAJOR_UPGRADE_NOTE=""
     ALLOW_MAJOR="no"
     MAJOR_REASON=""
     if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
       ALLOW_MAJOR="yes"
-      MAJOR_REASON="No security fix was available within the previous major"
-    elif [ "$UPDATE_MODE" = "composer" ] && [ "$IS_CORE_GROUP" != "yes" ] && major_allowed "$PROJECT_LABEL"; then
+      MAJOR_REASON="No security fix is available within the current major"
+    elif [ "$UPDATE_MODE" = "composer" ] && major_allowed "$PROJECT_LABEL"; then
       ALLOW_MAJOR="yes"
       MAJOR_REASON="$( major_allowed_reason "$PROJECT_LABEL" )"
     fi
+
     if [ "$ALLOW_MAJOR" = "yes" ]; then
-      LATEST="$( latest_available_version "$PROJECT_LABEL" )"
-      CURRENT="$( installed_version "$PROJECT_LABEL" )"
-      if [ -n "$LATEST" ] && [ "$LATEST" != "$CURRENT" ]; then
-        NEW_MAJOR="${LATEST%%.*}"
-        NEW_MAJOR="${NEW_MAJOR#v}"
-        echo "$PROJECT_LABEL needs a major upgrade at ${CURRENT:-unknown}: ${MAJOR_REASON}."
-        echo "Raising the constraint to ^${NEW_MAJOR}.0 and applying the major upgrade."
-        if [ "$IS_CORE_GROUP" = "yes" ]; then
-          # Raise every drupal/core* entry in composer.json together, or they end up split.
-          REQUIRE_ARGS=()
-          while IFS= read -r CORE_PKG; do
-            [ -n "$CORE_PKG" ] && REQUIRE_ARGS+=( "${CORE_PKG}:^${NEW_MAJOR}.0" )
-          done < <( jq -r '(.require // {}) | keys[]? | select(test("^drupal/core(-|$)"))' composer.json 2>/dev/null )
-        else
-          REQUIRE_ARGS=( "${PROJECT_LABEL}:^${NEW_MAJOR}.0" )
-        fi
-        if [ ${#REQUIRE_ARGS[@]} -gt 0 ] && $COMPOSER_CMD require "${REQUIRE_ARGS[@]}" --with-all-dependencies --no-interaction; then
-          [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
-          MAJOR_UPGRADE_NOTE="  - :rotating_light: **Major upgrade applied** (${CURRENT:-unknown} -> $( installed_version "$PROJECT_LABEL" )). ${MAJOR_REASON}, so the constraint in composer.json was raised to \`^${NEW_MAJOR}.0\`. Majors can contain breaking changes - review and test this one before merging."
-          if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
-            MAJOR_UPGRADE_NOTE+="\n  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
+      CURRENT="$( normalise_version "$( installed_version "$PROJECT_LABEL" )" )"
+
+      if ! is_release_version "$CURRENT"; then
+        # A branch install ("dev-main 9542d5a") has no major to reason about.
+        record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, but it is installed as '${CURRENT:-unknown}', which is not a release version. No automatic upgrade can be reasoned about; check it by hand." )"
+      else
+        CUR_MAJOR="$( major_of "$CURRENT" )"
+        read_in_major "$PROJECT_LABEL"                                   # -> IN_MAJOR, IN_MAJOR_STATUS
+        PUBLISHED="$( highest_published_in_major "$PROJECT_LABEL" "$CUR_MAJOR" )"
+        NEXT_MAJOR="$( next_major_after "$PROJECT_LABEL" "$CUR_MAJOR" )"
+
+        if version_gt "$PUBLISHED" "$CURRENT"; then
+          ##
+          # The current major is NOT exhausted. A major upgrade is off the table
+          # whatever the reason was -- this is the rule the reported bug broke.
+          # What remains is to say why the normal update did not get there.
+          ##
+          if version_gt "$IN_MAJOR" "$CURRENT" && [ "$IN_MAJOR_STATUS" = "update-possible" ]; then
+            # Composer can install it; the constraint in composer.json is what is
+            # holding it back. Widen it to the major -- and never past it.
+            echo "$PROJECT_LABEL has ${IN_MAJOR} available within ${CUR_MAJOR}.x, blocked by its constraint; widening to ^${CUR_MAJOR}.0."
+            if raise_constraint_to_major "$PROJECT_LABEL" "$CUR_MAJOR"; then
+              [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
+              MAJOR_UPGRADE_NOTE="  - :arrow_up: Constraint widened to \`^${CUR_MAJOR}.0\` to reach $( normalise_version "$( installed_version "$PROJECT_LABEL" )" ), the newest release in the current major. No major upgrade was needed."
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available within ${CUR_MAJOR}.x but the constraint could not be widened: $( summarise_composer_failure "$RAISE_LOG" )" )"
+            fi
+
+          elif version_gt "$IN_MAJOR" "$CURRENT"; then
+            # composer.json already allows it, so rewriting the constraint would
+            # change nothing. Something in the dependency graph is pinning it.
+            echo "$PROJECT_LABEL could move to ${IN_MAJOR} within ${CUR_MAJOR}.x but the update stayed on ${CURRENT}."
+            record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available inside ${CUR_MAJOR}.x and composer.json already allows it, but the update stayed on ${CURRENT}: $( why_not_summary "$PROJECT_LABEL" "$IN_MAJOR" )" )"
+
+          else
+            # The release exists but composer will not even offer it. Platform
+            # requirements are the usual reason, and the answer to that is to raise
+            # the platform, never to jump a major.
+            PF="$( in_major_ignoring_platform "$PROJECT_LABEL" )"
+            if version_gt "$PF" "$CURRENT"; then
+              PLATFORM_PHP="$( jq -r '.config.platform.php // empty' composer.json 2>/dev/null )"
+              record_failure "$PROJECT_LABEL" "$( oneline "${PUBLISHED} exists inside ${CUR_MAJOR}.x but is blocked by the platform php constraint in composer.json (config.platform.php = ${PLATFORM_PHP:-unset}). Raise the platform php, and the CI php-version with it, rather than crossing a major." )"
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "${PUBLISHED} exists inside ${CUR_MAJOR}.x but composer will not offer it -- minimum-stability, or the release's own requirements. Check it by hand." )"
+            fi
           fi
+
+        elif [ "$IS_CORE_GROUP" = "yes" ]; then
+          ##
+          # The core major really is exhausted -- and core still never crosses one
+          # automatically. Report it in the PR and the ticket instead.
+          ##
+          echo "Drupal core is at ${CURRENT} with nothing left in ${CUR_MAJOR}.x, but a core major is never applied automatically."
+          if [ -n "$NEXT_MAJOR" ]; then
+            record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}. The only remaining fix is Drupal ${NEXT_MAJOR}, and a core major upgrade is never applied automatically -- it has to be planned and tested by a person. The site stays on ${CURRENT} until then." )"
+            printf '%s\n' "drupal/core ${CURRENT} -> ${NEXT_MAJOR}.x" >> "$UPDATE_STATE_DIR/blocked"
+          else
+            record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, and no newer major of Drupal core exists either." )"
+          fi
+
+        elif [ -n "$NEXT_MAJOR" ]; then
+          ##
+          # Exhausted, not core: step exactly one major.
+          ##
+          echo "$PROJECT_LABEL is at ${CURRENT} with nothing left in ${CUR_MAJOR}.x: ${MAJOR_REASON}."
+          echo "Raising the constraint to ^${NEXT_MAJOR}.0 and applying the major upgrade."
+          if raise_constraint_to_major "$PROJECT_LABEL" "$NEXT_MAJOR"; then
+            LANDED="$( normalise_version "$( installed_version "$PROJECT_LABEL" )" )"
+            if [ "$( major_of "$LANDED" )" = "$NEXT_MAJOR" ]; then
+              MAJOR_UPGRADE_NOTE="  - :rotating_light: **Major upgrade applied** (${CURRENT} -> ${LANDED}). ${MAJOR_REASON}, so the constraint in composer.json was raised to \`^${NEXT_MAJOR}.0\`. Majors can contain breaking changes - review and test this one before merging."
+              FURTHER="$( next_major_after "$PROJECT_LABEL" "$NEXT_MAJOR" )"
+              if [ -n "$FURTHER" ]; then
+                printf '%s\n' "$PROJECT_LABEL ${LANDED} -> ${FURTHER}.x" >> "$UPDATE_STATE_DIR/blocked"
+              fi
+              if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
+                MAJOR_UPGRADE_NOTE+="\n  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
+              fi
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "Asked composer for ^${NEXT_MAJOR}.0 but it resolved ${LANDED:-nothing}. Check this one by hand." )"
+            fi
+          else
+            record_failure "$PROJECT_LABEL" "$( oneline "Needed a major upgrade to ^${NEXT_MAJOR}.0 (${MAJOR_REASON}), but composer could not resolve it: $( summarise_composer_failure "$RAISE_LOG" )" )"
+          fi
+
         else
-          echo "Could not raise $PROJECT_LABEL to ^${NEW_MAJOR}.0; leaving it as it is."
-          record_failure "$PROJECT_LABEL" "Needed a major upgrade to ^${NEW_MAJOR}.0 (${MAJOR_REASON}), but composer could not resolve it."
+          record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, and no newer release exists in any major. There is no automatic fix for it." )"
         fi
-      elif [ -z "$LATEST" ]; then
-        record_failure "$PROJECT_LABEL" "Needed a major upgrade (${MAJOR_REASON}) but no newer release exists, so there is no automatic fix."
       fi
     fi
     # Check for any changes
