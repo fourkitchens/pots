@@ -32,11 +32,12 @@ parameters:
       ticketing_system.
         any:        ticketing_system - clickup, productive or none. Falls back to the
                     TICKETING_SYSTEM env var, then to productive.
-        clickup:    list_id, client_id, status (optional)
+        clickup:    list_id, client_id
         productive: organization_id, project_id, task_list_id (optional),
                     board_id (optional), workflow_status_id (optional),
                     task_url_template (optional)
-        both:       assignee_id (optional)
+        both:       assignee_id (optional), status (optional; a status name,
+                    defaults to "Ready for Dev")
       The API token is NOT here - it is a CircleCI project env var (CU_TOKEN or
       PRODUCTIVE_TOKEN), since pipeline parameters are readable via the CircleCI API/UI.
       Defaults to "{}" (ticketing disabled).

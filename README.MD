@@ -504,12 +504,12 @@ ever active for a run:
 | `ticketing_system`   | any        | no       | `clickup`, `productive` or `none`. Falls back to the `TICKETING_SYSTEM` env var, then to `productive` |
 | `list_id`            | clickup    | yes      | ClickUp list the task is created in                          |
 | `client_id`          | clickup    | yes      | value for the "Client" custom field (a drop-down option UUID)|
-| `status`             | clickup    | no       | a status **name** on the list                                |
+| `status`             | both       | no       | status **name** the ticket opens in; defaults to `Ready for Dev` |
 | `organization_id`    | productive | yes      | Productive organization id (`X-Organization-Id`)             |
 | `project_id`         | productive | yes      | the project (workspace) the task is created in               |
 | `task_list_id`       | productive | no       | task list / milestone to file the task under                 |
 | `board_id`           | productive | no       | board (folder) to file the task under                        |
-| `workflow_status_id` | productive | no       | workflow status to open the task in                          |
+| `workflow_status_id` | productive | no       | workflow status id; overrides `status` and skips the name lookup |
 | `task_url_template`  | productive | no       | override the link built for the PR body                      |
 | `assignee_id`        | both       | no       | user/person id to assign                                     |
 
@@ -954,8 +954,9 @@ With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, b
 
 ### Steps to set the ClickUp integration (optional)
 
-When configured, AutoSec creates a ClickUp task for each security-update PR and links the
-task URL in the PR body. Ticketing is handled by
+When configured, AutoSec creates a ClickUp task for each update PR, links it in the PR body
+and puts its id in the PR title (`[ClickUp CU-<id>]`, or the task's custom id), which is
+what ClickUp's GitHub integration matches to link the PR to the task. Ticketing is handled by
 `scripts/updates/create-clickup-ticket` and is entirely optional — if it is not
 configured, AutoSec still updates packages and opens the PR, just without a ticket.
 
@@ -976,7 +977,7 @@ so they can be set per-trigger without touching config:
    | ------------- | -------- | ---------------------------------------------------------------- |
    | `list_id`     | yes      | ClickUp list the task is created in                              |
    | `client_id`   | yes      | value for the "Client" custom field (a **drop-down option UUID**) |
-   | `status`      | no       | a status **name** on the list (omit to use the list's default)   |
+   | `status`      | no       | a status **name** on the list; defaults to `Ready for Dev`       |
    | `assignee_id` | no       | ClickUp user id to assign                                        |
 
    Example: `{"list_id":"901327866278","client_id":"<option-uuid>","status":"in progress"}`
@@ -995,14 +996,15 @@ curl -s -H "Authorization: $CU_TOKEN" \
   https://api.clickup.com/api/v2/list/<list_id>/field \
   | jq '.fields[] | select(.name=="Client") | {type, options: .type_config.options}'
 
-# status — use the status NAME (not id/uuid). Omit the field to use the list default.
+# status — use the status NAME (not id/uuid), any case. Defaults to "Ready for Dev".
 curl -s -H "Authorization: $CU_TOKEN" \
   https://api.clickup.com/api/v2/list/<list_id> | jq -r '.statuses[].status'
 ```
 
-Note: ClickUp validates `status` before custom fields, so a bad `status` can mask a bad
-`client_id`. If a create returns HTTP 400, check the `ECODE`: `CRTSK_001` = status name not
-found; `FIELD_011` = the `client_id` isn't a valid drop-down option.
+The status is checked against the list before the task is created. A name the list does
+not define is logged as a warning and the task opens in the list's default status instead
+of failing. If a create returns HTTP 400, check the `ECODE`: `FIELD_011` = the `client_id`
+isn't a valid drop-down option.
 
 ### Steps to set the Productive.io integration (optional)
 
@@ -1042,13 +1044,20 @@ in `update-data` so it can be set per-trigger.
    | `task_list_id`       | no       | Task list / milestone to file the task under             |
    | `board_id`           | no       | Board (folder) to file the task under                    |
    | `assignee_id`        | no       | Person id to assign                                      |
-   | `workflow_status_id` | no       | Workflow status to open the task in                      |
+   | `status`             | no       | Workflow status **name** to open the task in; defaults to `Ready for Dev` |
+   | `workflow_status_id` | no       | Workflow status id; overrides `status` and skips the lookup |
    | `task_url_template`  | no       | Override the link built for the PR body (see below)      |
 
    Example: `{"organization_id":"31","project_id":"123456","task_list_id":"789"}`
 
    Optional relationships are omitted from the request entirely when unset — Productive
    rejects a relationship sent as null.
+
+   The status name is looked up, ignoring case, in the workflow the project uses. If the
+   workflow has no status by that name, a warning is logged and the task opens in
+   Productive's default status (usually Backlog).
+
+   The PR title carries the task number (`[Productive #123]`) and the PR body links it.
 
 #### Finding the ids (with `PRODUCTIVE_TOKEN` set)
 
@@ -1070,6 +1079,22 @@ curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/task_lists?filter[project
 curl -s "${AUTH[@]}" "https://api.productive.io/api/v2/people" \
   | jq '.data[] | {id, name: .attributes.name}'
 ```
+
+#### Ticket body formatting
+
+Both providers build the same body from `TICKET_TEMPLATE-<mode>.md`. The updated projects
+are a bullet list, and each package that could not be updated is a bullet with composer's
+explanation under it as a code block. ClickUp gets the body as Markdown
+(`markdown_content`). Productive gets it as HTML, with an empty paragraph wherever the
+template has a blank line, because Productive puts no space between paragraphs. Keep
+`[PROJECTS]` on a line of its own in an overridden template to get the list. Left inline,
+it gets the old comma-separated form.
+
+The title, the body and the default status live in `scripts/updates/ticket-lib.sh`, which
+both provider scripts source. It follows the usual override pattern at
+`.circleci/scripts/updates/ticket-lib.sh`. An overridden `create-<provider>-ticket` should
+print one line, `<reference><TAB><url>`. A bare URL still works, but then the PR title gets
+no ticket reference.
 
 #### A caveat on the ticket link
 

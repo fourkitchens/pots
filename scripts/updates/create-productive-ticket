@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Create a Productive.io task for an AutoSec security-update run and print its URL to stdout.
+# Create a Productive.io task for an AutoSec update run and print its reference and URL.
 #
 # The sibling of scripts/updates/create-clickup-ticket, deliberately sharing its
 # contract so both can run side by side while Four Kitchens migrates from ClickUp to
@@ -15,13 +15,15 @@
 #   UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
 #                         organization_id, project_id, task_list_id (optional),
 #                         board_id (optional), assignee_id (optional),
-#                         workflow_status_id (optional), task_url_template (optional).
+#                         status (optional), workflow_status_id (optional),
+#                         task_url_template (optional).
 #   SITE_NAME       (env) Site name, used in the ticket title/body.
 #
 # Output:
-#   The created task URL on stdout (empty when ticketing is unconfigured or the API call
-#   fails). All human-readable logging goes to stderr so callers can capture the URL with
-#   $( ... ). Always exits 0, so it can never abort the caller's security PR.
+#   One line on stdout, "<reference><TAB><url>" -- the reference is the task number as
+#   Productive shows it ("#123") -- or nothing when ticketing is unconfigured or the API
+#   call fails. All human-readable logging goes to stderr so callers can capture the line
+#   with $( ... ). Always exits 0, so it can never abort the caller's PR.
 #
 # SECURITY: never echo PRODUCTIVE_TOKEN, and do not enable `set -x` in this script.
 
@@ -43,6 +45,7 @@ if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] && echo "$UPDATE_DA
   PR_BOARD_ID=$(jq -r '.board_id // empty'              <<<"$UPDATE_DATA")
   PR_ASSIGNEE_ID=$(jq -r '.assignee_id // empty'        <<<"$UPDATE_DATA")
   PR_STATUS_ID=$(jq -r '.workflow_status_id // empty'   <<<"$UPDATE_DATA")
+  PR_STATUS_NAME=$(jq -r '.status // empty'             <<<"$UPDATE_DATA")
   PR_URL_TEMPLATE=$(jq -r '.task_url_template // empty' <<<"$UPDATE_DATA")
 fi
 
@@ -52,52 +55,54 @@ if ! { [ -n "${PRODUCTIVE_TOKEN:-}" ] && [ -n "${PR_ORG_ID:-}" ] && [ -n "${PR_P
   exit 0
 fi
 
-# Resolve the ticket template: consumer override, else the copy beside this script. This is
-# the same template ClickUp uses -- the wording is provider-agnostic on purpose.
-# The wording differs between a security run and a routine maintenance run, so the template
-# is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
-TEMPLATE_NAME="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md"
-if [ -f "./.circleci/scripts/updates/${TEMPLATE_NAME}" ]; then
-  TEMPLATE="./.circleci/scripts/updates/${TEMPLATE_NAME}"
+# Title, body and default status are shared with create-clickup-ticket.
+if [ -f "./.circleci/scripts/updates/ticket-lib.sh" ]; then
+  source "./.circleci/scripts/updates/ticket-lib.sh"
 else
-  TEMPLATE="$(dirname "$0")/${TEMPLATE_NAME}"
+  source "$(dirname "$0")/ticket-lib.sh"
 fi
 
-PR_BODY_MESSAGE=$(cat "$TEMPLATE")
-PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[SITE_NAME\]/$SITE_NAME}
-PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[PROJECTS\]/$PROJECTS_UPDATED}
+# Productive renders the task description as HTML.
+PR_BODY_HTML=$( ticket_markdown "$PROJECTS_UPDATED" | ticket_markdown_to_html )
+PR_TICKET_TITLE="$( ticket_title )"
 
-# Packages the run could not update, passed in by run-update as UPDATE_FAILURES (one
-# "- name: reason" line each, "None." when there were none). The whole block is dropped
-# when nothing failed: a client-facing ticket should not carry an empty "problems" heading.
-if [ -n "${UPDATE_FAILURES:-}" ] && [ "${UPDATE_FAILURES}" != "None." ]; then
-  # The trailing blank line matters: it keeps this its own paragraph instead of running
-  # into the closing sentence (command substitution eats the newline printf emits).
-  FAILURES_TEXT="Could not be updated automatically and need a look by hand:
-$( printf '%b' "${UPDATE_FAILURES}" )
-"
-else
-  FAILURES_TEXT=""
-fi
-PR_BODY_MESSAGE=${PR_BODY_MESSAGE//\[FAILURES\]/$FAILURES_TEXT}
+# GET a Productive API path, printing the JSON body, or nothing on any failure. -g stops
+# curl reading the [] in filter[...] as a glob.
+pr_get() {
+  local out
+  out=$(mktemp)
+  if [ "$(curl -s -g -o "$out" -w "%{http_code}" --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+      -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+      -H "X-Organization-Id: ${PR_ORG_ID}" \
+      -H "Content-Type: application/vnd.api+json" \
+      "${PR_API}$1")" = "200" ]; then
+    cat "$out"
+  fi
+  rm -f "$out"
+}
 
-# Productive renders the task description as HTML, so the template's blank lines and
-# single newlines collapse into one run-on paragraph. Turn blank-line-separated blocks
-# into <p> and the newlines inside a block into <br>. HTML metacharacters are escaped
-# first, so a site name or package list containing & or < cannot break the markup -- and
-# that has to happen before the tags are added, not after.
-PR_BODY_HTML=$(jq -rn --arg t "$PR_BODY_MESSAGE" '
-  $t
-  | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
-  | split("\n[ \t]*\n"; null)
-  | map(select(test("[^ \t\n]")) | sub("^\n+"; "") | sub("\n+$"; "") | gsub("\n"; "<br>") | "<p>" + . + "</p>")
-  | join("")
-')
-if [ "${UPDATE_MODE:-security}" = "composer" ]; then
-  PR_TICKET_TITLE="Maintenance Updates For Your Website - ${SITE_NAME}"
-else
-  PR_TICKET_TITLE="Security Updates Required For Your Website - ${SITE_NAME}"
+# Open the task in a named status ("Ready for Dev" unless update-data says otherwise)
+# instead of the first one in the workflow, which is usually Backlog. Statuses belong to
+# the project's workflow, so look the name up there. workflow_status_id, when set, wins and
+# skips the lookup. A name the workflow does not have is logged and left out, so the task
+# is still created, in Productive's default status.
+if [ -z "${PR_STATUS_ID:-}" ]; then
+  PR_STATUS_NAME="${PR_STATUS_NAME:-$TICKET_DEFAULT_STATUS}"
+  PR_WORKFLOW_ID=$( pr_get "/projects/${PR_PROJECT_ID}" \
+    | jq -r '.data.attributes.workflow_id // .data.relationships.workflow.data.id // empty' 2>/dev/null || true )
+  if [ -n "$PR_WORKFLOW_ID" ]; then
+    PR_STATUS_ID=$( pr_get "/workflow_statuses?filter[workflow_id]=${PR_WORKFLOW_ID}&page[size]=200" \
+      | jq -r --arg n "$PR_STATUS_NAME" \
+          '[.data[]? | select((.attributes.name | ascii_downcase) == ($n | ascii_downcase)) | .id][0] // empty' \
+          2>/dev/null || true )
+  fi
+  if [ -n "$PR_STATUS_ID" ]; then
+    log "Opening the task in status '${PR_STATUS_NAME}' (${PR_STATUS_ID})."
+  else
+    log "Warning: no workflow status named '${PR_STATUS_NAME}' found for project ${PR_PROJECT_ID}; using Productive's default status."
+  fi
 fi
+
 DUE_DATE="$(date +%F)"
 
 # Build the JSON:API request body with jq so quotes/newlines in the site name or project
@@ -147,17 +152,28 @@ PR_HTTP=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
 
 if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
   TASK_ID=$(jq -r '.data.id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  TASK_NUMBER=$(jq -r '.data.attributes.task_number // empty' "$RESPONSE_FILE" 2>/dev/null || true)
   if [ -z "$TASK_ID" ]; then
     log "Warning: Productive returned HTTP ${PR_HTTP} but no task id; continuing without a ticket."
   else
     # Productive does not return a web URL for the task, so build one. The template is
     # configurable because the permalink shape is not part of the documented API: set
     # task_url_template in UPDATE_DATA if this default ever stops matching.
-    TEMPLATE_URL="${PR_URL_TEMPLATE:-https://app.productive.io/{org}/task/{id}}"
+    # The default is assigned separately: inside ${PR_URL_TEMPLATE:-...} the first "}"
+    # of "{org}" would close the expansion and mangle the link.
+    DEFAULT_URL_TEMPLATE='https://app.productive.io/{org}/task/{id}'
+    TEMPLATE_URL="${PR_URL_TEMPLATE:-$DEFAULT_URL_TEMPLATE}"
     TICKET_URL=${TEMPLATE_URL//\{org\}/$PR_ORG_ID}
     TICKET_URL=${TICKET_URL//\{id\}/$TASK_ID}
-    log "Productive task created: ${TICKET_URL}"
-    echo "$TICKET_URL"   # the only stdout: the caller captures this
+    # "#123" is how Productive itself labels the task. Without a task number, fall back to
+    # the internal id, which is not one people will recognise, so say what it is.
+    if [ -n "$TASK_NUMBER" ]; then
+      TICKET_REF="#${TASK_NUMBER}"
+    else
+      TICKET_REF="task ${TASK_ID}"
+    fi
+    log "Productive task ${TICKET_REF} created: ${TICKET_URL}"
+    printf '%s\t%s\n' "$TICKET_REF" "$TICKET_URL"   # the only stdout: the caller captures this
   fi
 else
   log "Warning: Productive task creation failed (HTTP ${PR_HTTP}); continuing without a ticket."

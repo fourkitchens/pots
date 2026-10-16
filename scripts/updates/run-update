@@ -677,7 +677,7 @@ if [ -n "$PACKAGES" ]; then
 
   cd $DIR
 
-  # Create the ClickUp ticket + the PR.
+  # Create the ticket + the PR.
   if [ -z "$MESSAGE" ]
   then
     echo "Nothing to update."
@@ -730,15 +730,16 @@ if [ -n "$PACKAGES" ]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
     fi
 
-    # Open a ticket first, so its URL can be linked in the PR body. The provider script
-    # gates itself on its own configuration, prints the ticket URL (empty when it is
-    # unconfigured or its API call fails) and always exits 0, so ticketing can never fail
-    # the security PR.
+    # Open a ticket first, so it can be referenced in the PR title and linked in the body.
+    # The provider script gates itself on its own configuration, prints
+    # "<reference><TAB><url>" (nothing when it is unconfigured or its API call fails) and
+    # always exits 0, so ticketing can never fail the PR.
     #
     # The provider comes from ticketing_system in the update-data blob, falling back to
     # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
     # with two separate defaults is how the two halves drift apart.
     TICKET_URL=""
+    TICKET_REF=""
     TICKETING="$( resolve_ticketing_system )"
     echo "Ticketing system: ${TICKETING}"
     case "$TICKETING" in
@@ -761,7 +762,14 @@ if [ -n "$PACKAGES" ]; then
         fi
         TICKET_SCRIPT=$( pots_file "create-${TICKETING}-ticket" )
         if [ -x "$TICKET_SCRIPT" ]; then
-          TICKET_URL=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" || true)
+          TICKET_OUT=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" | tail -n 1 || true)
+          # An older consumer override prints just the URL, with no reference before it.
+          if [[ "$TICKET_OUT" == *$'\t'* ]]; then
+            TICKET_REF="${TICKET_OUT%%$'\t'*}"
+            TICKET_URL="${TICKET_OUT#*$'\t'}"
+          else
+            TICKET_URL="$TICKET_OUT"
+          fi
         else
           echo "No ticket script found at ${TICKET_SCRIPT}; skipping ticketing."
         fi
@@ -776,6 +784,18 @@ if [ -n "$PACKAGES" ]; then
     echo "-------------------------------------------"
     if [ -z "$TICKET_URL" ]; then
       TICKET_URL="_No ticket was created for this update._"
+    elif [ -n "$TICKET_REF" ]; then
+      case "$TICKETING" in
+        clickup)    TICKET_LABEL="ClickUp ${TICKET_REF}" ;;
+        productive) TICKET_LABEL="Productive ${TICKET_REF}" ;;
+        *)          TICKET_LABEL="$TICKET_REF" ;;
+      esac
+      # The reference goes in the title too. For ClickUp that is what links the PR to the
+      # task (its GitHub integration matches "CU-<id>" in a PR title); for Productive it
+      # puts the task number where people search for it. Inside the link text below,
+      # GitHub does not mistake "#123" for an issue in this repo.
+      PR_TITLE="${PR_TITLE} [${TICKET_LABEL}]"
+      TICKET_URL="[${TICKET_LABEL}](${TICKET_URL})"
     fi
     BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
     BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
