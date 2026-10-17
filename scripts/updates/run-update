@@ -730,7 +730,7 @@ if [ -n "$PACKAGES" ]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
     fi
 
-    # Open a ticket first, so it can be referenced in the PR title and linked in the body.
+    # Open a ticket first, so it can be linked in the PR body.
     # The provider script gates itself on its own configuration, prints
     # "<reference><TAB><url>" (nothing when it is unconfigured or its API call fails) and
     # always exits 0, so ticketing can never fail the PR.
@@ -799,11 +799,7 @@ if [ -n "$PACKAGES" ]; then
         productive) TICKET_LABEL="Productive ${TICKET_REF}" ;;
         *)          TICKET_LABEL="$TICKET_REF" ;;
       esac
-      # The reference goes in the title too. For ClickUp that is what links the PR to the
-      # task (its GitHub integration matches "CU-<id>" in a PR title); for Productive it
-      # puts the task number where people search for it. Inside the link text below,
-      # GitHub does not mistake "#123" for an issue in this repo.
-      PR_TITLE="${PR_TITLE} [${TICKET_LABEL}]"
+      # Inside the link text, GitHub does not mistake "#123" for an issue in this repo.
       TICKET_URL="[${TICKET_LABEL}](${TICKET_URL})"
     fi
     BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")

@@ -954,9 +954,8 @@ With the arrival of AutoSec to POTS, this set of SSH keys is no longer enough, b
 
 ### Steps to set the ClickUp integration (optional)
 
-When configured, AutoSec creates a ClickUp task for each update PR, links it in the PR body
-and puts its id in the PR title (`[ClickUp CU-<id>]`, or the task's custom id), which is
-what ClickUp's GitHub integration matches to link the PR to the task. Ticketing is handled by
+When configured, AutoSec creates a ClickUp task for each update PR and links it in the PR
+body as `ClickUp CU-<id>` (or the task's custom id). Ticketing is handled by
 `scripts/updates/create-clickup-ticket` and is entirely optional — if it is not
 configured, AutoSec still updates packages and opens the PR, just without a ticket.
 
@@ -1057,7 +1056,7 @@ in `update-data` so it can be set per-trigger.
    workflow has no status by that name, a warning is logged and the task opens in
    Productive's default status (usually Backlog).
 
-   The PR title carries the task number (`[Productive #123]`) and the PR body links it.
+   The PR body links the task by its number (`Productive #123`).
 
 #### Finding the ids (with `PRODUCTIVE_TOKEN` set)
 
@@ -1093,8 +1092,8 @@ it gets the old comma-separated form.
 The title, the body and the default status live in `scripts/updates/ticket-lib.sh`, which
 both provider scripts source. It follows the usual override pattern at
 `.circleci/scripts/updates/ticket-lib.sh`. An overridden `create-<provider>-ticket` should
-print one line, `<reference><TAB><url>`. A bare URL still works, but then the PR title gets
-no ticket reference.
+print one line, `<reference><TAB><url>`. A bare URL still works, but then the PR body shows
+the raw URL instead of the ticket reference.
 
 #### A caveat on the ticket link
 

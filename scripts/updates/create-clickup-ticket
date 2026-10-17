@@ -16,8 +16,7 @@
 #
 # Output:
 #   One line on stdout, "<reference><TAB><url>" -- the reference is the task's custom id,
-#   or "CU-<id>", the form ClickUp's GitHub integration recognises in a PR title -- or
-#   nothing when ticketing is unconfigured or the API call fails. All human-readable
+#   or "CU-<id>" -- or nothing when ticketing is unconfigured or the API call fails. All human-readable
 #   logging goes to stderr so callers can capture the line with $( ... ). Always exits 0,
 #   so it can never abort the caller's PR.
 #
