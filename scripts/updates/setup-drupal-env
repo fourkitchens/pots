@@ -1,0 +1,362 @@
+#!/bin/bash
+#
+# Stand up a working Drupal site inside the CI container so that AutoSec can run
+# `drush updatedb` and export the configuration changes a security update brings with it.
+#
+# Called once by scripts/updates/run-update, *after* it has confirmed there
+# are security updates to apply (so a no-op AutoSec run never pays for a database restore)
+# and after the update branch has been created. Also runnable standalone for testing.
+#
+# Strategy: restore the canonical Pantheon database, then normalise it by importing
+# ./config so the active configuration matches what is in git. Without that normalisation
+# any drift between the live site and the exported configuration would show up in the
+# per-package `config:export` diffs and drown out the changes the modules actually made.
+#
+# Inputs (all optional unless noted):
+#   DOCROOT                     Drupal docroot, relative to the project root. Default: web
+#   CI_SETTINGS_FILE            Settings file to write, relative to the project root.
+#                               Default: $DOCROOT/sites/default/settings.local.php
+#   UPDATE_DB_ENV           Pantheon environment to pull the database from.
+#                               Default: $CANONICAL_ENV, else "live"
+#   UPDATE_DB_DUMP          Path to a local gzipped dump. When set, Terminus is skipped
+#                               entirely and this file is imported instead. Use it to run
+#                               this script locally.
+#   UPDATE_CREATE_BACKUP    YES to create a fresh Pantheon backup before downloading.
+#                               Default: NO (use the latest existing backup).
+#   UPDATE_BASELINE_COMMIT  What to do when the very first config:export is already
+#                               dirty (pre-existing drift): YES commit it separately (the
+#                               default), NO discard it, ABORT disable the phase.
+#   SANITIZE_SCRIPT             Optional script run against the restored database.
+#   TERMINUS_TOKEN / TERMINUS_SITE   Required unless UPDATE_DB_DUMP is set.
+#   UPDATE_DB_{HOST,PORT,NAME,USER,PASS}  Override the CI database connection. The
+#                               defaults match the cimg/mariadb sidecar.
+#   UPDATE_STATE_DIR           Where to leave state for apply-db-updates. Default: /tmp/pots-update
+#
+# Output:
+#   $UPDATE_STATE_DIR/env       sourceable DRUSH / DRUPAL_ROOT / CONFIG_SYNC_DIR
+#   $UPDATE_STATE_DIR/disabled  present when the database phase must not run
+#   $UPDATE_STATE_DIR/notes     human-readable warnings, surfaced in the PR body
+#
+# Exits non-zero when the environment could not be prepared, but ALWAYS records the reason
+# in $UPDATE_STATE_DIR/disabled first, so the caller can fall back to a composer-only
+# security PR rather than failing the whole run.
+
+set -eo pipefail
+
+STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
+mkdir -p "$STATE_DIR"
+
+log()  { echo "[autosec:setup] $*" >&2; }
+# run-update renders this file one ":warning:" bullet per line, so a note has to be a
+# single line: collapse any embedded newline or run of whitespace, and cap the length so
+# an unexpectedly large interpolated value cannot swamp the pull request body.
+note() {
+  printf '%s' "$*" \
+    | tr '\n\r\t' '   ' \
+    | tr -s ' ' \
+    | cut -c1-500 \
+    | sed 's/[[:space:]]*$//' >> "$STATE_DIR/notes"
+  printf '\n' >> "$STATE_DIR/notes"
+}
+
+# Record why the database/config-export phase cannot run. apply-db-updates checks for this
+# flag and becomes a no-op, so the composer updates, push and PR still happen.
+disable_phase() {
+  log "DATABASE PHASE DISABLED: $*"
+  note "$*"
+  : > "$STATE_DIR/disabled"
+}
+
+PROJECT_ROOT="$(pwd)"
+DRUPAL_ROOT="$PROJECT_ROOT/${DOCROOT:-web}"
+
+if [ ! -d "$DRUPAL_ROOT" ]; then
+  disable_phase "Docroot '$DRUPAL_ROOT' does not exist; set DOCROOT to the directory composer installs Drupal into."
+  exit 1
+fi
+
+##
+# 1. Resolve drush by path.
+#
+# Never rely on drush being on $PATH: it is installed by composer at ./vendor/bin/drush and
+# the CI image does not put it on the path.
+##
+if [ -x "$PROJECT_ROOT/vendor/bin/drush" ]; then
+  DRUSH="$PROJECT_ROOT/vendor/bin/drush"
+elif command -v drush >/dev/null 2>&1; then
+  DRUSH="$(command -v drush)"
+else
+  disable_phase "drush was not found at ./vendor/bin/drush or on \$PATH. Move drush/drush from require-dev to require: CI installs dependencies with --no-dev."
+  exit 1
+fi
+log "Using drush at $DRUSH"
+DRUSH_CMD=( "$DRUSH" --root="$DRUPAL_ROOT" )
+
+# Read a single --format=string field from drush.
+#
+# PHP CLI sends display_errors output to STDOUT, not STDERR, so "2>/dev/null" does not stop
+# "Deprecated: ..." notices from landing inside a captured value -- and on PHP 8.4 the
+# Drupal/Drush dependency tree emits dozens of them. A polluted value then fails whatever
+# check it feeds and gets quoted verbatim into the pull request body.
+#
+# Drop the PHP diagnostics, then take the last non-empty line: that is the field value.
+drush_value() {
+  "${DRUSH_CMD[@]}" "$@" --format=string 2>/dev/null \
+    | grep -Ev '^[[:space:]]*(PHP )?(Deprecated|Warning|Notice|Strict Standards|Fatal error|Parse error):' \
+    | grep -Ev '^[[:space:]]*(#[0-9]+ |PHP Stack trace:|thrown in )' \
+    | grep -v '^[[:space:]]*$' \
+    | tail -n 1 \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+##
+# 2. Wait for the database sidecar to accept connections.
+##
+DB_HOST="${UPDATE_DB_HOST:-127.0.0.1}"
+DB_PORT="${UPDATE_DB_PORT:-3306}"
+DB_NAME="${UPDATE_DB_NAME:-circle_test}"
+DB_USER="${UPDATE_DB_USER:-root}"
+DB_PASS="${UPDATE_DB_PASS:-}"
+
+MYSQL_ARGS=( -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" )
+if [ -n "$DB_PASS" ]; then
+  MYSQL_ARGS+=( "-p$DB_PASS" )
+fi
+
+if ! command -v mysql >/dev/null 2>&1; then
+  disable_phase "The mysql client is not installed in this container; the AutoSec job must install mariadb-client."
+  exit 1
+fi
+
+log "Waiting for the database at $DB_HOST:$DB_PORT ..."
+DB_READY="no"
+for _ in $(seq 1 60); do
+  if mysqladmin "${MYSQL_ARGS[@]}" ping >/dev/null 2>&1; then
+    DB_READY="yes"
+    break
+  fi
+  sleep 1
+done
+if [ "$DB_READY" != "yes" ]; then
+  disable_phase "The database at $DB_HOST:$DB_PORT never became available."
+  exit 1
+fi
+log "Database is up."
+
+##
+# 3. Write the CI settings file.
+#
+# Both the database credentials and the handful of settings a containerised Drupal needs go
+# into a file the project's settings.php already includes, so no consumer settings.php edit
+# is required. Projects using a different filename set CI_SETTINGS_FILE.
+##
+CI_SETTINGS_FILE="${CI_SETTINGS_FILE:-${DOCROOT:-web}/sites/default/settings.local.php}"
+SETTINGS_PATH="$PROJECT_ROOT/$CI_SETTINGS_FILE"
+
+if [ ! -d "$(dirname "$SETTINGS_PATH")" ]; then
+  disable_phase "Cannot write $CI_SETTINGS_FILE: $(dirname "$CI_SETTINGS_FILE") does not exist."
+  exit 1
+fi
+
+# Preserve a settings file the project owns, but never stack backups of our own: rerunning
+# this script in the same checkout would otherwise "back up" the file it wrote last time.
+UPDATE_MARKER="Written by scripts/updates/setup-drupal-env"
+if [ -f "$SETTINGS_PATH" ]; then
+  if grep -q "$UPDATE_MARKER" "$SETTINGS_PATH" 2>/dev/null; then
+    log "Replacing the $CI_SETTINGS_FILE written by a previous run."
+  else
+    log "Backing up the existing $CI_SETTINGS_FILE"
+    mv "$SETTINGS_PATH" "$SETTINGS_PATH.pots-update-bak"
+  fi
+fi
+
+# The hash salt only has to exist and be stable for the life of this container; it never has
+# to match production, so generate one rather than reading it off the live site.
+if command -v openssl >/dev/null 2>&1; then
+  HASH_SALT="$(openssl rand -base64 32)"
+else
+  HASH_SALT="$(head -c 32 /dev/urandom | base64)"
+fi
+
+cat > "$SETTINGS_PATH" <<PHP_EOF
+<?php
+
+/**
+ * @file
+ * Settings for the throwaway Drupal site AutoSec builds in CI.
+ *
+ * Written by scripts/updates/setup-drupal-env. Never committed.
+ */
+
+\$databases['default']['default'] = [
+  'driver' => 'mysql',
+  'database' => '$DB_NAME',
+  'username' => '$DB_USER',
+  'password' => '$DB_PASS',
+  'host' => '$DB_HOST',
+  'port' => '$DB_PORT',
+];
+
+\$settings['hash_salt'] = '$HASH_SALT';
+\$settings['file_temp_path'] = sys_get_temp_dir();
+\$settings['trusted_host_patterns'][] = '.*';
+\$settings['skip_permissions_hardening'] = TRUE;
+PHP_EOF
+log "Wrote $CI_SETTINGS_FILE"
+
+##
+# 4. Restore the database.
+##
+if [ -n "${UPDATE_DB_DUMP:-}" ]; then
+  if [ ! -f "$UPDATE_DB_DUMP" ]; then
+    disable_phase "UPDATE_DB_DUMP is set to '$UPDATE_DB_DUMP' but that file does not exist."
+    exit 1
+  fi
+  log "Importing the local dump $UPDATE_DB_DUMP (Terminus skipped)."
+  DUMP_PATH="$UPDATE_DB_DUMP"
+else
+  if [ -z "${TERMINUS_TOKEN:-}" ] || [ -z "${TERMINUS_SITE:-}" ]; then
+    disable_phase "TERMINUS_TOKEN and TERMINUS_SITE are required to download the database. Set them, or point UPDATE_DB_DUMP at a local dump."
+    exit 1
+  fi
+
+  # Authenticate with Terminus (idempotent), matching scripts/pantheon/sync-from-live.
+  if [[ -z "$( terminus whoami )" ]]; then
+    log "Logging in to terminus"
+    terminus -n auth:login --machine-token="$TERMINUS_TOKEN"
+  else
+    log "Using existing terminus session"
+  fi
+
+  DB_ENV="${UPDATE_DB_ENV:-${CANONICAL_ENV:-live}}"
+  DUMP_PATH="/tmp/pots-update-db.sql.gz"
+
+  if [[ "${UPDATE_CREATE_BACKUP:-NO}" == "YES" ]]; then
+    log "Creating a fresh database backup of $TERMINUS_SITE.$DB_ENV"
+    terminus -n backup:create "$TERMINUS_SITE.$DB_ENV" --element=db
+  fi
+
+  log "Downloading the database from $TERMINUS_SITE.$DB_ENV"
+  rm -f "$DUMP_PATH"
+  terminus -n backup:get "$TERMINUS_SITE.$DB_ENV" --element=db --to="$DUMP_PATH"
+fi
+
+log "Importing the database into $DB_NAME ..."
+gunzip -c "$DUMP_PATH" | mysql "${MYSQL_ARGS[@]}" "$DB_NAME"
+log "Database imported."
+
+if [ -n "${SANITIZE_SCRIPT:-}" ]; then
+  if [ -x "$SANITIZE_SCRIPT" ]; then
+    log "Running the sanitize script $SANITIZE_SCRIPT"
+    "$SANITIZE_SCRIPT"
+  else
+    log "WARNING: SANITIZE_SCRIPT is set to '$SANITIZE_SCRIPT' but it is not executable; skipping."
+  fi
+fi
+
+##
+# 5. Verify the bootstrap and, critically, where configuration is exported to.
+#
+# A config:export aimed at the wrong directory silently writes the site's entire
+# configuration into a directory nothing reads. Ask Drupal where its sync directory is and
+# refuse to continue unless it is a real, in-repo config directory.
+##
+DB_STATUS="$( drush_value status --field=db-status || true )"
+if [[ "$DB_STATUS" != *"Connected"* ]]; then
+  disable_phase "Drupal could not connect to the restored database (drush reported '${DB_STATUS:-no answer}'). Check that $CI_SETTINGS_FILE is included by the project's settings.php."
+  exit 1
+fi
+log "Drupal is connected to the restored database."
+
+RAW_SYNC_DIR="$( drush_value status --field=config-sync || true )"
+if [ -z "$RAW_SYNC_DIR" ]; then
+  disable_phase "Drupal did not report a config sync directory; \$settings['config_sync_directory'] is probably unset."
+  exit 1
+fi
+
+# The reported path is relative to the Drupal root.
+CONFIG_SYNC_DIR="$( cd "$DRUPAL_ROOT" && cd "$RAW_SYNC_DIR" 2>/dev/null && pwd )" || CONFIG_SYNC_DIR=""
+if [ -z "$CONFIG_SYNC_DIR" ]; then
+  disable_phase "The config sync directory Drupal reported ('$RAW_SYNC_DIR', relative to $DRUPAL_ROOT) does not exist."
+  exit 1
+fi
+
+if [ ! -f "$CONFIG_SYNC_DIR/system.site.yml" ]; then
+  disable_phase "The config sync directory '$CONFIG_SYNC_DIR' holds no system.site.yml, so it is not this site's exported configuration. Exporting there would write the whole site configuration to the wrong place. Fix \$settings['config_sync_directory'] before enabling the AutoSec database phase."
+  exit 1
+fi
+
+case "$CONFIG_SYNC_DIR" in
+  "$PROJECT_ROOT"/*) : ;;
+  *)
+    disable_phase "The config sync directory '$CONFIG_SYNC_DIR' is outside the repository, so any export could not be committed."
+    exit 1
+    ;;
+esac
+log "Configuration will be exported to $CONFIG_SYNC_DIR"
+
+##
+# 6. Normalise: drain updates already pending on the canonical environment, then make the
+#    active configuration match what is in git, so every later diff is attributable to a
+#    package we just updated.
+##
+log "Rebuilding caches."
+"${DRUSH_CMD[@]}" cr
+
+log "Applying database updates already pending on the restored database."
+if ! "${DRUSH_CMD[@]}" updatedb -y; then
+  disable_phase "'drush updatedb' failed against the restored database before any package was updated."
+  exit 1
+fi
+
+log "Importing ./config so the active configuration matches the repository."
+if ! "${DRUSH_CMD[@]}" config:import -y; then
+  disable_phase "'drush config:import' failed against the restored database. Without it every export would be full of pre-existing drift, so the configuration export has been skipped."
+  exit 1
+fi
+
+"${DRUSH_CMD[@]}" cr
+
+##
+# 7. Baseline export. Anything dirty now is pre-existing drift, not something a security
+#    update caused, so keep it out of the per-package commits.
+##
+log "Taking a baseline configuration export."
+"${DRUSH_CMD[@]}" config:export -y
+
+if [ -n "$( git status --porcelain -- "$CONFIG_SYNC_DIR" )" ]; then
+  case "${UPDATE_BASELINE_COMMIT:-YES}" in
+    ABORT)
+      git checkout -- "$CONFIG_SYNC_DIR"
+      git clean -fdq -- "$CONFIG_SYNC_DIR"
+      disable_phase "The site's configuration export is not stable: a plain export of the unmodified site already differs from ./config. UPDATE_BASELINE_COMMIT=ABORT, so the configuration export has been skipped."
+      exit 1
+      ;;
+    NO)
+      # checkout alone would leave behind any configuration file the export newly created.
+      git checkout -- "$CONFIG_SYNC_DIR"
+      git clean -fdq -- "$CONFIG_SYNC_DIR"
+      note "A plain export of the unmodified site already differed from ./config. That pre-existing drift was discarded, so it may reappear inside the first package's configuration commit."
+      log "Discarded the baseline drift (UPDATE_BASELINE_COMMIT=NO)."
+      ;;
+    *)
+      git add -- "$CONFIG_SYNC_DIR"
+      git commit -m "${COMMIT_PREFIX:-(AUTO-SEC)}: Baseline config export before updates" >&2
+      note "A plain export of the unmodified site already differed from ./config. That pre-existing drift was committed separately as \"Baseline config export before updates\" so the per-package configuration commits stay attributable."
+      log "Committed the baseline drift separately."
+      ;;
+  esac
+else
+  log "Baseline export is clean."
+fi
+
+##
+# Hand state to apply-db-updates.
+##
+cat > "$STATE_DIR/env" <<STATE_EOF
+DRUSH='$DRUSH'
+DRUPAL_ROOT='$DRUPAL_ROOT'
+CONFIG_SYNC_DIR='$CONFIG_SYNC_DIR'
+STATE_EOF
+
+log "Drupal environment ready."

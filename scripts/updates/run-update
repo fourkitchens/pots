@@ -1,0 +1,885 @@
+#!/bin/bash
+#
+# Run an automated dependency update: update packages, apply the database updates and
+# configuration changes they bring with them, push a branch, open a ticket and a PR.
+#
+# Usage: run-update [security|composer]
+#
+#   security  (default) update packages with known security advisories.
+#   composer            routine MINOR updates - minor and patch releases.
+#
+# Major versions. A major is applied ONLY when there is nothing left to move to inside the
+# major that is installed, and then only one major at a time. Whatever remains above that
+# is reported in the PR instead of applied. Drupal core never crosses a major
+# automatically in either mode: that is a planned upgrade, not an automated one. A package
+# becomes a candidate when it is still flagged by `composer audit` after the normal update
+# (security mode) or when its installed branch is unsupported (composer mode).
+#
+# Drupal core is always updated as one group, `composer update "drupal/core-*"
+# --with-all-dependencies`, in both modes: its packages are released in lockstep and must
+# stay on the same version.
+#
+# The two modes differ only in which packages are selected, which is delegated to an
+# overridable select-packages-<mode> script. Everything after that - the Drupal
+# environment, updatedb, config export, commits, push, ticket and PR - is shared.
+
+# Exit on error
+set -e
+
+UPDATE_MODE="${1:-security}"
+
+echo "Updating projects (mode: $UPDATE_MODE)"
+DIR=$(pwd)
+COMPOSER_CMD=$(which composer)
+NOW=$(date +'%F')
+cd $DIR
+
+# Resolve a script or template that ships with POTS, honouring a consumer override in
+# ./.circleci/scripts/updates/. Everything this script calls out to must go through
+# here: hardcoding the vendor path means a consumer who overrides one file still silently
+# gets the vendored copy of the others.
+pots_file () {
+  if [ -f "./.circleci/scripts/updates/$1" ]; then
+    echo "./.circleci/scripts/updates/$1"
+  else
+    echo "./vendor/fourkitchens/pots/scripts/updates/$1"
+  fi
+}
+
+source "$( pots_file 4k-openai-lib.sh )"
+
+# Everything that differs between the two modes lives here.
+case "$UPDATE_MODE" in
+  security)
+    BRANCH_NAME="feature/automated-sec-update-$NOW"
+    PR_TITLE="(AUTO-SEC): Security updates for $NOW"
+    COMMIT_PREFIX="(AUTO-SEC)"
+    ;;
+  composer)
+    BRANCH_NAME="feature/automated-composer-update-$NOW"
+    PR_TITLE="(AUTO-UPDATE): Minor composer updates for $NOW"
+    COMMIT_PREFIX="(AUTO-UPDATE)"
+    ;;
+  *)
+    echo "Unknown update mode '$UPDATE_MODE' (expected 'security' or 'composer')." >&2
+    exit 1
+    ;;
+esac
+PR_TEMPLATE="PULL_REQUEST_TEMPLATE-${UPDATE_MODE}.md"
+# Shared with apply-db-updates and setup-drupal-env so every commit this run makes carries
+# the same prefix.
+export COMMIT_PREFIX
+
+UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
+export UPDATE_STATE_DIR
+rm -rf "$UPDATE_STATE_DIR"
+mkdir -p "$UPDATE_STATE_DIR"
+
+# Ask the mode's selector which packages to update. It prints one package name per line and
+# always exits 0, so "nothing to update" is a normal, quiet outcome.
+PACKAGES="$( "$( pots_file "select-packages-${UPDATE_MODE}" )" || true )"
+
+MESSAGE=""
+TEST_STEPS=""
+PROJECTS_UPDATED=""
+CONFIG_CHANGES=""
+
+# Helper function to check if branch exist on remote repository.
+# Echoes "true" if the branch already exists on the remote, "false" otherwise. It must
+# NOT exit: it runs inside $( ... ), so an exit here would only kill the subshell and the
+# caller would silently keep working on the current branch (main/master).
+gh_branch_exist () {
+  if [[ `git ls-remote --heads origin $BRANCH_NAME` ]]; then
+    echo "true"
+  else
+    # Branch does not yet exist
+    echo "false"
+  fi
+}
+
+# Creates a Git branch.
+create_gh_branch () {
+  # Create the update branch for $NOW. -B rather than `git branch` + `git checkout` so a
+  # re-run on a workspace that already has the branch locally resets it instead of dying
+  # under `set -e`.
+  cd $DIR
+  git checkout -B "$BRANCH_NAME"
+  echo "true"
+}
+
+
+##
+# Drupal core grouping.
+#
+# Core is not one package. drupal/core, drupal/core-recommended,
+# drupal/core-composer-scaffold, drupal/core-project-message and drupal/core-dev are
+# released in lockstep and must always sit on the exact same version. Updating them one at
+# a time either fails outright -- core-recommended pins core to an exact version -- or
+# leaves the set straddling two releases. The documented Drupal procedure is a single
+# grouped update, so that is what a selected core package turns into:
+#
+#   composer update "drupal/core-*" --with-all-dependencies
+#
+# CORE_TOKEN is the placeholder that stands in for the whole group inside the update loop.
+##
+CORE_TOKEN='drupal/core-*'
+
+core_update_args() {
+  # "drupal/core-*" does not match drupal/core itself (no hyphen). That is normally fine:
+  # core-recommended pins core exactly, so --with-all-dependencies drags it along. Add it
+  # explicitly only when the project requires drupal/core directly instead.
+  printf '%s\n' "$CORE_TOKEN"
+  if jq -e '.require["drupal/core"] // empty' composer.json >/dev/null 2>&1; then
+    printf '%s\n' 'drupal/core'
+  fi
+}
+
+# Every drupal/core* package installed, as "name version" pairs.
+core_installed_versions() {
+  composer show --format=json 2>/dev/null \
+    | jq -r '.installed[]? | select(.name | test("^drupal/core(-|$)")) | "\(.name) \(.version)"' \
+    || true
+}
+
+# Requirement: the core packages must all land on the same version. The grouped update
+# should guarantee it, but a stale constraint on one of them can still split the set, and
+# a half-upgraded core is the kind of thing that must not reach a reviewer unannounced.
+check_core_versions_match() {
+  local pairs distinct
+  pairs="$( core_installed_versions )"
+  [ -z "$pairs" ] && return 0
+  distinct="$( printf '%s\n' "$pairs" | awk '{print $2}' | sort -u | wc -l | tr -d ' ' )"
+  if [ "$distinct" -gt 1 ]; then
+    echo "WARNING: drupal/core* packages are not all on the same version:" >&2
+    printf '%s\n' "$pairs" >&2
+    printf '%s\n' "drupal/core* packages did not all land on the same version after the grouped update ($( printf '%s' "$pairs" | tr '\n' ';' )). Check the constraints in composer.json before merging." \
+      >> "$UPDATE_STATE_DIR/notes"
+  fi
+}
+
+# Boil a failed composer run down to one reportable line.
+#
+# Composer prints its dependency conflicts as an indented "Problem N" block, which is the
+# part a human needs; everything around it is noise. Fall back to the last few non-empty
+# lines when the output does not match that shape (a network error, a plugin blowing up).
+summarise_composer_failure() {
+  local log="$1" summary
+  summary="$( sed -n '/^[[:space:]]*Problem [0-9]/,/^[[:space:]]*$/p' "$log" 2>/dev/null \
+    | sed 's/^[[:space:]]*//' | sed '/^$/d' | head -n 8 )"
+  if [ -z "$summary" ]; then
+    summary="$( grep -v '^[[:space:]]*$' "$log" 2>/dev/null | tail -n 5 )"
+  fi
+  printf '%s' "$summary" | tr '\n\r\t' '   ' | tr -s ' ' | cut -c1-600 | sed 's/[[:space:]]*$//'
+}
+
+# Record a package the run could not update, for the PR body and the ticket.
+record_failure() {
+  printf '%s\t%s\n' "$1" "$2" >> "$UPDATE_STATE_DIR/failed"
+}
+
+# Packages the composer-mode selector marked as safe to take across a major boundary,
+# written as "name<TAB>reason" by select-packages-composer.
+major_allowed() {
+  [ -s "$UPDATE_STATE_DIR/allow-major" ] || return 1
+  cut -f1 "$UPDATE_STATE_DIR/allow-major" | grep -qxF "$1"
+}
+
+major_allowed_reason() {
+  awk -F'\t' -v p="$1" '$1 == p { print $2; exit }' "$UPDATE_STATE_DIR/allow-major" 2>/dev/null
+}
+
+
+# Which ticketing system to open the ticket in, in order of precedence:
+#
+#   1. ticketing_system in the update-data blob -- the trigger POST, so whoever owns the
+#      trigger can move a project between systems without touching project settings. It
+#      sits with the rest of the ticketing configuration it selects between.
+#   2. the TICKETING_SYSTEM env var -- kept so projects configured before this moved into
+#      the POST keep working untouched.
+#   3. productive, the default.
+#
+# UPDATE_DATA defaults to the literal "{}" and is operator-supplied, so validate it before
+# parsing, exactly as the ticket scripts do with their own keys.
+resolve_ticketing_system() {
+  local from_blob=""
+  if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] \
+     && printf '%s' "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+    from_blob="$( printf '%s' "$UPDATE_DATA" | jq -r '.ticketing_system // empty' )"
+  fi
+  printf '%s' "${from_blob:-${TICKETING_SYSTEM:-productive}}"
+}
+
+# True when nothing actually asked for a ticketing system and we fell back to the default.
+# Worth knowing, because a default that silently cannot work is the one case where no
+# ticket appears and nothing says why.
+ticketing_system_was_defaulted() {
+  local from_blob=""
+  if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] \
+     && printf '%s' "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+    from_blob="$( printf '%s' "$UPDATE_DATA" | jq -r '.ticketing_system // empty' )"
+  fi
+  [ -z "$from_blob" ] && [ -z "${TICKETING_SYSTEM:-}" ]
+}
+
+# Is this package still covered by a security advisory, with whatever is installed now?
+package_still_vulnerable() {
+  local pkg="$1"
+  composer audit --format=json 2>/dev/null \
+    | jq -e --arg p "$pkg" '(.advisories // {}) | has($p)' >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# Version strings.
+#
+# Composer, packagist and drupal.org disagree about a leading "v", and a package
+# installed from a branch reports as "dev-main 9542d5a" -- version and sha, with a
+# space. Nothing is compared, split or parsed before it has been through here.
+# ---------------------------------------------------------------------------
+normalise_version() {
+  local v="${1%% *}"
+  printf '%s' "${v#v}"
+}
+
+# A version this script is willing to reason about. A branch alias is not something
+# semver logic can answer questions about, and guessing a major out of one is how a
+# site ends up on the wrong version.
+is_release_version() {
+  normalise_version "$1" | grep -qE '^[0-9]+(\.[0-9]+){1,3}$'
+}
+
+major_of() {
+  local v
+  v="$( normalise_version "$1" )"
+  printf '%s' "${v%%.*}"
+}
+
+# True when $1 is strictly newer than $2. Field-by-field numeric, never a string
+# compare: as strings "10.2.6" sorts below "9.5.0".
+version_gt() {
+  local a b
+  a="$( normalise_version "$1" )"; b="$( normalise_version "$2" )"
+  [ -n "$a" ] || return 1
+  [ "$a" = "$b" ] && return 1
+  [ "$( printf '%s\n%s\n' "$a" "$b" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -n 1 )" = "$a" ]
+}
+
+# Collapse free text to one safe field. record_failure writes "name<TAB>reason" and
+# the PR renderer reads it back with IFS=$'\t', so a tab or newline in a reason
+# silently truncates the report.
+oneline() {
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -s ' ' | cut -c1-600 | sed 's/[[:space:]]*$//'
+}
+
+# ---------------------------------------------------------------------------
+# `composer outdated` has two output shapes and the difference is easy to miss.
+# Given an EXACT package name it prints a bare package object -- a top-level
+# "latest", and no "latest-status" at all. Given a wildcard it prints
+# {"installed":[...]} with "latest-status" on every entry. Reading only the
+# envelope is what made this whole escalation path a silent no-op; reading only
+# the bare object throws away latest-status, which is the field that says whether
+# composer.json is what is holding a package back.
+#
+# So: append "*" to force list mode, then select the exact name back out.
+#
+#   --minor-only   "latest" is the newest installable release in the SAME major
+#   --all          the package is listed even when it is already up to date
+#   latest-status  up-to-date | semver-safe-update | update-possible
+#
+# Prints "latest<TAB>latest-status"; empty when composer knows nothing about it.
+# ---------------------------------------------------------------------------
+outdated_entry() {                      # $1 package, $2.. extra composer flags
+  local pkg="$1"
+  shift
+  $COMPOSER_CMD outdated "${pkg}*" --format=json "$@" 2>/dev/null \
+    | jq -r --arg p "$pkg" '
+        .installed[]? | select(.name == $p)
+        | "\(.latest // "")\t\(.["latest-status"] // "")"' \
+    | head -n 1
+}
+
+# Highest release composer would actually install inside the current major, plus
+# whether composer.json allows it. Sets IN_MAJOR and IN_MAJOR_STATUS.
+read_in_major() {
+  local line
+  line="$( outdated_entry "$1" --minor-only --all )"
+  IN_MAJOR="$( normalise_version "$( printf '%s' "$line" | cut -f1 )" )"
+  IN_MAJOR_STATUS="$( printf '%s' "$line" | cut -f2 )"
+}
+
+# The same question with the project's platform requirements lifted. When this
+# answers and read_in_major does not, config.platform is the blocker -- and the
+# fix for that is to raise the platform, never to cross a major.
+in_major_ignoring_platform() {
+  normalise_version "$( outdated_entry "$1" --minor-only --all --ignore-platform-reqs | cut -f1 )"
+}
+
+# Every stable release this package has published. Deliberately ignores both the
+# project's constraints and the platform: this answers "what exists", not "what is
+# installable", and keeping those apart is the whole point of the fix. Pre-releases
+# are filtered out -- a 2.0.0-beta1 is not an upgrade target, and counting it would
+# make a major look available when it is not.
+published_releases() {
+  $COMPOSER_CMD show "$1" --all --format=json 2>/dev/null \
+    | jq -r '.versions[]? // empty' \
+    | grep -E '^v?[0-9]+(\.[0-9]+){1,3}$' \
+    | sed 's/^v//'
+}
+
+available_majors() {
+  published_releases "$1" | awk -F. '{ print $1 }' | sort -u -n
+}
+
+# Highest release published inside one major. This is what tells "this major is
+# exhausted" apart from "this major has more to give but this project cannot reach
+# it" -- the distinction the reported bug turned on.
+highest_published_in_major() {
+  published_releases "$1" \
+    | awk -F. -v m="$2" '$1 + 0 == m + 0' \
+    | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n \
+    | tail -n 1
+}
+
+# The NEXT major after the installed one, never the newest.
+next_major_after() {
+  available_majors "$1" | awk -v c="$2" '$1 + 0 > c + 0 { print $1; exit }'
+}
+
+installed_version() {
+  local pkg="$1"
+  $COMPOSER_CMD show "$pkg" --format=json 2>/dev/null | jq -r '.versions[0] // empty' | head -n 1
+}
+
+# Composer's own explanation of why a version will not install, boiled down to one
+# PR-sized line. Purely diagnostic: it never gates a decision.
+why_not_summary() {
+  oneline "$( $COMPOSER_CMD why-not "$1" "$2" --no-interaction 2>/dev/null \
+    | grep -v 'Not finding what you were looking for' \
+    | sed 's/[[:space:]]\{2,\}/ /g' | sed '/^$/d' | head -n 4 )"
+}
+
+# Every drupal/core* constraint in composer.json as "section<TAB>name". require-dev
+# matters: drupal/core-dev lives there, and raising it without --dev would move it
+# into require.
+core_constraint_entries() {
+  jq -r '
+    [ (.require // {} | keys[]? | {s: "require", n: .}),
+      (.["require-dev"] // {} | keys[]? | {s: "require-dev", n: .}) ]
+    | .[] | select(.n | test("^drupal/core(-|$)")) | "\(.s)\t\(.n)"' \
+    composer.json 2>/dev/null
+}
+
+# Rewrite the constraint for a package -- or for the whole core group -- to a given
+# major. Leaves composer's output in $RAISE_LOG and returns composer's exit code.
+#
+# The core group is raised as one set, from what composer.json actually declares:
+# requiring "drupal/core" by name would add a root dependency the project never had
+# (this site requires core-recommended, not core), and raising only some of the set
+# splits it across versions. require-dev entries are raised with --dev, and only
+# when installed: CI runs `composer install --no-dev`, so requiring an absent one
+# would fail the run over a package that is not even there.
+raise_constraint_to_major() {           # $1 label, $2 major
+  local label="$1" major="$2" rc=0 section name
+  local prod=() dev=()
+  RAISE_LOG="$UPDATE_STATE_DIR/raise-$( printf '%s' "$label" | tr '/*' '--' ).log"
+  : > "$RAISE_LOG"
+  if [ "$IS_CORE_GROUP" = "yes" ]; then
+    while IFS=$'\t' read -r section name; do
+      [ -z "$name" ] && continue
+      if [ "$section" = "require-dev" ]; then
+        if [ -n "$( installed_version "$name" )" ]; then
+          dev+=( "${name}:^${major}.0" )
+        else
+          printf '%s\n' "$name is in require-dev at an older constraint and is not installed in CI, so it was left alone; raise it to ^${major}.0 by hand." \
+            >> "$UPDATE_STATE_DIR/notes"
+        fi
+      else
+        prod+=( "${name}:^${major}.0" )
+      fi
+    done < <( core_constraint_entries )
+  else
+    prod=( "${label}:^${major}.0" )
+  fi
+  if [ ${#prod[@]} -eq 0 ] && [ ${#dev[@]} -eq 0 ]; then
+    printf '%s\n' "No composer.json constraint found for ${label}." >> "$RAISE_LOG"
+    return 1
+  fi
+  if [ ${#prod[@]} -gt 0 ]; then
+    $COMPOSER_CMD require "${prod[@]}" --with-all-dependencies --no-interaction >> "$RAISE_LOG" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -eq 0 ] && [ ${#dev[@]} -gt 0 ]; then
+    $COMPOSER_CMD require --dev "${dev[@]}" --with-all-dependencies --no-interaction >> "$RAISE_LOG" 2>&1 || rc=$?
+  fi
+  cat "$RAISE_LOG" >&2
+  return "$rc"
+}
+
+ # Only do any work when the selector actually found something.
+if [ -n "$PACKAGES" ]; then
+  # Fold every selected drupal/core* package into the single CORE_TOKEN entry, and put it
+  # first so contrib resolves against the new core rather than the old one.
+  if printf '%s\n' "$PACKAGES" | grep -qE '^drupal/core(-[a-z-]+)?$'; then
+    echo "Core packages selected ($( printf '%s\n' "$PACKAGES" | grep -E '^drupal/core(-[a-z-]+)?$' | tr '\n' ' ')); updating them as one group."
+    PACKAGES="$( printf '%s\n' "$PACKAGES" | grep -vE '^drupal/core(-[a-z-]+)?$' || true )"
+    PACKAGES="$( printf '%s\n%s\n' "$CORE_TOKEN" "$PACKAGES" | sed '/^$/d' )"
+  fi
+  echo "Packages to update: $(echo "$PACKAGES" | tr '\n' ' ')"
+  if [[ $(gh_branch_exist) == "false" ]]
+  then
+    echo "Creating Git branch for the sec update..."
+    create_gh_branch
+    echo "Git branch created."
+  else
+    echo "Branch $BRANCH_NAME already exists; checking it out."
+    git checkout "$BRANCH_NAME"
+  fi
+
+  # Stand up a working Drupal site so the database updates that ship with these security
+  # releases can be run and any configuration they change can be exported. This is only
+  # worth doing once we know there is something to update. A failure here is recorded and
+  # reported in the PR body, but must not stop the security updates themselves.
+  if [[ "${UPDATE_RUN_DB_UPDATES:-YES}" != "NO" ]]; then
+    echo "Preparing the Drupal environment for database updates..."
+    "$( pots_file setup-drupal-env )" || true
+  else
+    echo "UPDATE_RUN_DB_UPDATES is 'NO'. Skipping database updates and configuration export."
+    : > "$UPDATE_STATE_DIR/disabled"
+  fi
+
+  # Update one package at a time. This is a *partial* composer update, which matters: a full
+  # `composer update` re-resolves the whole graph and can fail for reasons unrelated to the
+  # packages we want to move (an advisory-blocked pin, a path-repo branch mismatch). Partial
+  # updates sidestep that, and they give per-package commits a reviewer can follow.
+  while IFS= read -r PROJECT; do
+    [ -z "$PROJECT" ] && continue
+    cd $DIR
+    # The core group is several packages behind one token. PROJECT_LABEL is what the PR,
+    # the commits and the AI prompt should call it; PROJECT stays the composer argument.
+    if [ "$PROJECT" = "$CORE_TOKEN" ]; then
+      PROJECT_LABEL="drupal/core"
+      IS_CORE_GROUP="yes"
+      UPDATE_TARGETS=()
+      while IFS= read -r CORE_ARG; do
+        [ -n "$CORE_ARG" ] && UPDATE_TARGETS+=( "$CORE_ARG" )
+      done < <( core_update_args )
+    else
+      PROJECT_LABEL="$PROJECT"
+      IS_CORE_GROUP="no"
+      UPDATE_TARGETS=( "$PROJECT" )
+    fi
+    echo "Updating $PROJECT_LABEL"
+    echo "-----------------"
+    # Core moves as a set, so it needs --with-all-dependencies; a single package is kept to
+    # --with-dependencies, which is the narrower, more predictable partial update.
+    if [ "$IS_CORE_GROUP" = "yes" ]; then
+      UPDATE_FLAG="--with-all-dependencies"
+    else
+      UPDATE_FLAG="--with-dependencies"
+    fi
+    # A package can legitimately refuse to move (an exact version pin, a conflicting
+    # dependency). That does not fail the run -- the other packages still get updated --
+    # but it must not vanish either: a package nobody notices is stuck is a package that
+    # stays un-updated for months. Capture the reason for the PR body and the ticket.
+    UPDATE_LOG="$UPDATE_STATE_DIR/update-$( printf '%s' "$PROJECT_LABEL" | tr '/*' '--' ).log"
+    if ! $COMPOSER_CMD update "${UPDATE_TARGETS[@]}" "$UPDATE_FLAG" > "$UPDATE_LOG" 2>&1; then
+      cat "$UPDATE_LOG" >&2
+      FAILURE_REASON="$( summarise_composer_failure "$UPDATE_LOG" )"
+      record_failure "$PROJECT_LABEL" "${FAILURE_REASON:-composer update failed; see the CI log.}"
+      echo "Could not update $PROJECT_LABEL; recorded for the PR and skipping it."
+      continue
+    fi
+    cat "$UPDATE_LOG" >&2
+    [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
+
+    ##
+    # Crossing a major version boundary.
+    #
+    # THE RULE: a major is applied only when there is no valid version left inside the
+    # major that is currently installed. A partial `composer update` can only move a
+    # package within the constraint already in composer.json, so crossing a major means
+    # rewriting that constraint with `composer require` -- and doing that while, say,
+    # 10.6.18 was still available under a "~10.1" constraint is how a site ends up on
+    # Drupal 11 when it should have moved to the newest Drupal 10.
+    #
+    # Three rules, in order:
+    #
+    #   1. If a newer release exists inside the installed major, that is the target and
+    #      no major is even considered. This is checked FIRST, core included.
+    #   2. Drupal core never crosses a major automatically, in either mode. Once its
+    #      major is exhausted it is reported for a human, not upgraded.
+    #   3. For everything else, once the major is exhausted, step to the NEXT major --
+    #      not the newest. One set of breaking changes per PR; the rest stays reported.
+    #
+    # What makes a package a candidate at all:
+    #
+    #   security mode  it is still flagged by `composer audit` after the normal update.
+    #   composer mode  its installed branch is unsupported (see select-packages-composer),
+    #                  so it will never receive another release of any kind.
+    ##
+    MAJOR_UPGRADE_NOTE=""
+    ALLOW_MAJOR="no"
+    MAJOR_REASON=""
+    if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
+      ALLOW_MAJOR="yes"
+      MAJOR_REASON="No security fix is available within the current major"
+    elif [ "$UPDATE_MODE" = "composer" ] && major_allowed "$PROJECT_LABEL"; then
+      ALLOW_MAJOR="yes"
+      MAJOR_REASON="$( major_allowed_reason "$PROJECT_LABEL" )"
+    fi
+
+    if [ "$ALLOW_MAJOR" = "yes" ]; then
+      CURRENT="$( normalise_version "$( installed_version "$PROJECT_LABEL" )" )"
+
+      if ! is_release_version "$CURRENT"; then
+        # A branch install ("dev-main 9542d5a") has no major to reason about.
+        record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, but it is installed as '${CURRENT:-unknown}', which is not a release version. No automatic upgrade can be reasoned about; check it by hand." )"
+      else
+        CUR_MAJOR="$( major_of "$CURRENT" )"
+        read_in_major "$PROJECT_LABEL"                                   # -> IN_MAJOR, IN_MAJOR_STATUS
+        PUBLISHED="$( highest_published_in_major "$PROJECT_LABEL" "$CUR_MAJOR" )"
+        NEXT_MAJOR="$( next_major_after "$PROJECT_LABEL" "$CUR_MAJOR" )"
+
+        if version_gt "$PUBLISHED" "$CURRENT"; then
+          ##
+          # The current major is NOT exhausted. A major upgrade is off the table
+          # whatever the reason was -- this is the rule the reported bug broke.
+          # What remains is to say why the normal update did not get there.
+          ##
+          if version_gt "$IN_MAJOR" "$CURRENT" && [ "$IN_MAJOR_STATUS" = "update-possible" ]; then
+            # Composer can install it; the constraint in composer.json is what is
+            # holding it back. Widen it to the major -- and never past it.
+            echo "$PROJECT_LABEL has ${IN_MAJOR} available within ${CUR_MAJOR}.x, blocked by its constraint; widening to ^${CUR_MAJOR}.0."
+            if raise_constraint_to_major "$PROJECT_LABEL" "$CUR_MAJOR"; then
+              [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
+              MAJOR_UPGRADE_NOTE="  - :arrow_up: Constraint widened to \`^${CUR_MAJOR}.0\` to reach $( normalise_version "$( installed_version "$PROJECT_LABEL" )" ), the newest release in the current major. No major upgrade was needed."
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available within ${CUR_MAJOR}.x but the constraint could not be widened: $( summarise_composer_failure "$RAISE_LOG" )" )"
+            fi
+
+          elif version_gt "$IN_MAJOR" "$CURRENT"; then
+            # composer.json already allows it, so rewriting the constraint would
+            # change nothing. Something in the dependency graph is pinning it.
+            echo "$PROJECT_LABEL could move to ${IN_MAJOR} within ${CUR_MAJOR}.x but the update stayed on ${CURRENT}."
+            record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available inside ${CUR_MAJOR}.x and composer.json already allows it, but the update stayed on ${CURRENT}: $( why_not_summary "$PROJECT_LABEL" "$IN_MAJOR" )" )"
+
+          else
+            # The release exists but composer will not even offer it. Platform
+            # requirements are the usual reason, and the answer to that is to raise
+            # the platform, never to jump a major.
+            PF="$( in_major_ignoring_platform "$PROJECT_LABEL" )"
+            if version_gt "$PF" "$CURRENT"; then
+              PLATFORM_PHP="$( jq -r '.config.platform.php // empty' composer.json 2>/dev/null )"
+              record_failure "$PROJECT_LABEL" "$( oneline "${PUBLISHED} exists inside ${CUR_MAJOR}.x but is blocked by the platform php constraint in composer.json (config.platform.php = ${PLATFORM_PHP:-unset}). Raise the platform php, and the CI php-version with it, rather than crossing a major." )"
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "${PUBLISHED} exists inside ${CUR_MAJOR}.x but composer will not offer it -- minimum-stability, or the release's own requirements. Check it by hand." )"
+            fi
+          fi
+
+        elif [ "$IS_CORE_GROUP" = "yes" ]; then
+          ##
+          # The core major really is exhausted -- and core still never crosses one
+          # automatically. Report it in the PR and the ticket instead.
+          ##
+          echo "Drupal core is at ${CURRENT} with nothing left in ${CUR_MAJOR}.x, but a core major is never applied automatically."
+          if [ -n "$NEXT_MAJOR" ]; then
+            record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}. The only remaining fix is Drupal ${NEXT_MAJOR}, and a core major upgrade is never applied automatically -- it has to be planned and tested by a person. The site stays on ${CURRENT} until then." )"
+            printf '%s\n' "drupal/core ${CURRENT} -> ${NEXT_MAJOR}.x" >> "$UPDATE_STATE_DIR/blocked"
+          else
+            record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, and no newer major of Drupal core exists either." )"
+          fi
+
+        elif [ -n "$NEXT_MAJOR" ]; then
+          ##
+          # Exhausted, not core: step exactly one major.
+          ##
+          echo "$PROJECT_LABEL is at ${CURRENT} with nothing left in ${CUR_MAJOR}.x: ${MAJOR_REASON}."
+          echo "Raising the constraint to ^${NEXT_MAJOR}.0 and applying the major upgrade."
+          if raise_constraint_to_major "$PROJECT_LABEL" "$NEXT_MAJOR"; then
+            LANDED="$( normalise_version "$( installed_version "$PROJECT_LABEL" )" )"
+            if [ "$( major_of "$LANDED" )" = "$NEXT_MAJOR" ]; then
+              MAJOR_UPGRADE_NOTE="  - :rotating_light: **Major upgrade applied** (${CURRENT} -> ${LANDED}). ${MAJOR_REASON}, so the constraint in composer.json was raised to \`^${NEXT_MAJOR}.0\`. Majors can contain breaking changes - review and test this one before merging."
+              FURTHER="$( next_major_after "$PROJECT_LABEL" "$NEXT_MAJOR" )"
+              if [ -n "$FURTHER" ]; then
+                printf '%s\n' "$PROJECT_LABEL ${LANDED} -> ${FURTHER}.x" >> "$UPDATE_STATE_DIR/blocked"
+              fi
+              if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
+                MAJOR_UPGRADE_NOTE+="\n  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
+              fi
+            else
+              record_failure "$PROJECT_LABEL" "$( oneline "Asked composer for ^${NEXT_MAJOR}.0 but it resolved ${LANDED:-nothing}. Check this one by hand." )"
+            fi
+          else
+            record_failure "$PROJECT_LABEL" "$( oneline "Needed a major upgrade to ^${NEXT_MAJOR}.0 (${MAJOR_REASON}), but composer could not resolve it: $( summarise_composer_failure "$RAISE_LOG" )" )"
+          fi
+
+        else
+          record_failure "$PROJECT_LABEL" "$( oneline "${MAJOR_REASON}, and no newer release exists in any major. There is no automatic fix for it." )"
+        fi
+      fi
+    fi
+    # Check for any changes
+    if [[ `git status --porcelain` ]]; then
+        #committing recent changes.
+        git add composer.*
+        git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL"
+
+        # Run the database updates this package brings with it and commit any configuration
+        # they changed. Always exits 0; prints a Markdown summary for the PR body.
+        DB_SUMMARY=$( "$( pots_file apply-db-updates )" "$PROJECT_LABEL" )
+        if [ -n "$DB_SUMMARY" ]; then
+          CONFIG_CHANGES+="${DB_SUMMARY}\n"
+        fi
+
+        # Building PR information.
+        # Remove prefix "drupal/" from the project name
+        AUX=${PROJECT_LABEL//drupal\//''}
+        PROJECTS_UPDATED+="${AUX}, "
+        if [ "$IS_CORE_GROUP" = "yes" ]; then
+          AUX="- Update [Drupal core](https://www.drupal.org/project/drupal/releases) (\`drupal/core-*\`, updated as one group)."
+        elif [[ "$PROJECT_LABEL" != drupal/* ]]; then
+          # Not a Drupal project, so there is no drupal.org release page to link.
+          AUX="- Update [${PROJECT_LABEL}](https://packagist.org/packages/${PROJECT_LABEL})."
+        elif [ $AUX == 'core' ] || [ $AUX == 'core-recommended' ] || [ $AUX == 'core-composer-scaffold' ]; then
+          AUX="- Update [${PROJECT_LABEL}](https://www.drupal.org/project/drupal/releases)."
+        else
+          AUX="- Update the contrib module: [${PROJECT_LABEL}](https://www.drupal.org/project/${AUX}/releases)."
+        fi
+        MESSAGE+="${AUX}\n"
+        # Flag a crossed major boundary directly under the package it applies to.
+        if [ -n "$MAJOR_UPGRADE_NOTE" ]; then
+          MESSAGE+="${MAJOR_UPGRADE_NOTE}\n"
+        fi
+        # AI-generated testing steps (optional). A failure here must never abort the
+        # update run, so the call is non-fatal and we only append when it returned text.
+        if [ -n "${OPENAI_API_KEY}" ]; then
+          if [ "$UPDATE_MODE" = "security" ]; then
+            PROMPT_TEXT="I am updating the following drupal project: $PROJECT_LABEL, because a security update, could you give me functional testing instructions for it?"
+          else
+            PROMPT_TEXT="I am applying a routine minor update to the following drupal project: $PROJECT_LABEL, could you give me functional testing instructions for it?"
+          fi
+          # Tell the model what the update actually did, so the steps target the areas that
+          # changed instead of being generic.
+          if [ -n "$DB_SUMMARY" ]; then
+            PROMPT_TEXT+=$'\n\nThe update ran these database updates and changed these configuration files:\n'
+            PROMPT_TEXT+="$DB_SUMMARY"
+          fi
+          OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT" || true)
+          if [ -n "$OPENAI_RESPONSE" ]; then
+            TEST_STEPS+="### AI testing instructions for the project ${PROJECT_LABEL}:\n"
+            TEST_STEPS+="${OPENAI_RESPONSE}\n"
+          fi
+        fi
+        echo "Updated $PROJECT_LABEL"
+        echo "---------------"
+    fi
+  done <<< "$PACKAGES"
+  echo "Projects updated"
+  echo "---------------"
+
+  cd $DIR
+
+  # Create the ticket + the PR.
+  if [ -z "$MESSAGE" ]
+  then
+    echo "Nothing to update."
+  else
+    echo "Pushing update changes to remote repo"
+    echo "-------------------------------------------"
+    git push --set-upstream origin $BRANCH_NAME
+
+
+    # Fold the database/configuration results, and any warnings the database phase
+    # recorded, into one section of the PR body.
+    if [ -f "$UPDATE_STATE_DIR/notes" ]; then
+      while IFS= read -r LINE; do
+        [ -n "$LINE" ] && CONFIG_CHANGES+="- :warning: ${LINE}\n"
+      done < "$UPDATE_STATE_DIR/notes"
+    fi
+    # Major upgrades the selector deliberately did not apply. Surfacing them is the point:
+    # the team needs to know a major is waiting, and that a human has to plan it.
+    BLOCKED_UPDATES=""
+    if [ -s "$UPDATE_STATE_DIR/blocked" ]; then
+      while IFS= read -r LINE; do
+        [ -n "$LINE" ] && BLOCKED_UPDATES+="- \`${LINE}\`\n"
+      done < "$UPDATE_STATE_DIR/blocked"
+    fi
+    if [ -z "$BLOCKED_UPDATES" ]; then
+      BLOCKED_UPDATES="_None._"
+    fi
+
+    # Packages that could not be updated. Two renderings of the same list: Markdown for
+    # the PR body, and a plain-text version for the ticket, whose description is read by
+    # someone who is not looking at composer output.
+    FAILED_UPDATES=""
+    FAILED_PLAIN=""
+    if [ -s "$UPDATE_STATE_DIR/failed" ]; then
+      while IFS=$'\t' read -r FNAME FREASON; do
+        [ -z "$FNAME" ] && continue
+        FAILED_UPDATES+="- :x: \`${FNAME}\` - ${FREASON}\n"
+        FAILED_PLAIN+="- ${FNAME}: ${FREASON}\n"
+      done < "$UPDATE_STATE_DIR/failed"
+    fi
+    if [ -z "$FAILED_UPDATES" ]; then
+      FAILED_UPDATES="_None._"
+      FAILED_PLAIN="None."
+    else
+      echo "Some packages could not be updated; they are reported in the PR and the ticket."
+    fi
+    export UPDATE_FAILURES="$FAILED_PLAIN"
+
+    if [ -z "$CONFIG_CHANGES" ]; then
+      CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
+    fi
+
+    # Open a ticket first, so it can be referenced in the PR title and linked in the body.
+    # The provider script gates itself on its own configuration, prints
+    # "<reference><TAB><url>" (nothing when it is unconfigured or its API call fails) and
+    # always exits 0, so ticketing can never fail the PR.
+    #
+    # The provider comes from ticketing_system in the update-data blob, falling back to
+    # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
+    # with two separate defaults is how the two halves drift apart.
+    TICKET_URL=""
+    TICKET_REF=""
+    TICKETING="$( resolve_ticketing_system )"
+    echo "Ticketing system: ${TICKETING}"
+    case "$TICKETING" in
+      none)
+        echo "Ticketing is disabled (ticketing_system=none)."
+        ;;
+      clickup|productive)
+        # A default nobody chose, with no token behind it, would otherwise skip ticketing
+        # in complete silence -- the provider scripts exit 0 by design so they can never
+        # fail the PR. Say so in the job log and in the PR.
+        if ticketing_system_was_defaulted; then
+          TICKET_TOKEN_VAR="CU_TOKEN"
+          [ "$TICKETING" = "productive" ] && TICKET_TOKEN_VAR="PRODUCTIVE_TOKEN"
+          eval "TICKET_TOKEN=\${${TICKET_TOKEN_VAR}:-}"
+          if [ -z "$TICKET_TOKEN" ]; then
+            echo "WARNING: no ticketing system was specified and the default (${TICKETING}) has no ${TICKET_TOKEN_VAR}; no ticket will be created." >&2
+            printf '%s\n' "No ticketing system was specified in update-data or TICKETING_SYSTEM, so the default (${TICKETING}) was used - but ${TICKET_TOKEN_VAR} is not set, so no ticket was created. Set ticketing_system in the trigger POST, or add the token." \
+              >> "$UPDATE_STATE_DIR/notes"
+          fi
+        fi
+        TICKET_SCRIPT=$( pots_file "create-${TICKETING}-ticket" )
+        if [ -x "$TICKET_SCRIPT" ]; then
+          TICKET_OUT=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" | tail -n 1 || true)
+          # An older consumer override prints just the URL, with no reference before it.
+          if [[ "$TICKET_OUT" == *$'\t'* ]]; then
+            TICKET_REF="${TICKET_OUT%%$'\t'*}"
+            TICKET_URL="${TICKET_OUT#*$'\t'}"
+          else
+            TICKET_URL="$TICKET_OUT"
+          fi
+        else
+          echo "No ticket script found at ${TICKET_SCRIPT}; skipping ticketing."
+        fi
+        ;;
+      *)
+        echo "Unknown ticketing system '${TICKETING}' (expected clickup, productive or none); skipping ticketing."
+        ;;
+    esac
+
+    # Create the PR, linking the ticket if one was created.
+    echo "Creating the update Pull request."
+    echo "-------------------------------------------"
+    if [ -z "$TICKET_URL" ]; then
+      case "$TICKETING" in
+        clickup|productive)
+          # Configured but nothing came back: the provider script hit an error. Point at
+          # the job log, which has the reason, rather than leaving it to look intentional.
+          TICKET_URL="_No ticket was created: the ${TICKETING} ticket could not be created. See the job log${CIRCLE_BUILD_URL:+ ($CIRCLE_BUILD_URL)} for the reason._"
+          ;;
+        *)
+          TICKET_URL="_No ticket was created for this update._"
+          ;;
+      esac
+    elif [ -n "$TICKET_REF" ]; then
+      case "$TICKETING" in
+        clickup)    TICKET_LABEL="ClickUp ${TICKET_REF}" ;;
+        productive) TICKET_LABEL="Productive ${TICKET_REF}" ;;
+        *)          TICKET_LABEL="$TICKET_REF" ;;
+      esac
+      # The reference goes in the title too. For ClickUp that is what links the PR to the
+      # task (its GitHub integration matches "CU-<id>" in a PR title); for Productive it
+      # puts the task number where people search for it. Inside the link text below,
+      # GitHub does not mistake "#123" for an issue in this repo.
+      PR_TITLE="${PR_TITLE} [${TICKET_LABEL}]"
+      TICKET_URL="[${TICKET_LABEL}](${TICKET_URL})"
+    fi
+    BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
+    BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
+    BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
+    BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
+    BODY=${BODY//\[FAILED_UPDATES\]/$FAILED_UPDATES}
+    BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
+    BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
+    if [ ! -z "$SITE_NAME" ]; then
+      BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
+    fi
+    # The body carries free-form text -- the AI testing steps and the database/config
+    # summary -- so it can contain double quotes and backslashes. Hand-building the JSON
+    # with printf escaped newlines only, and a single quote in the model's output was
+    # enough to make GitHub reject the whole request with HTTP 400. Let jq encode it.
+    # The template's own sections carry literal "\n" escapes rather than real newlines,
+    # so turn those into real ones first. Substitution rather than printf '%b': %b would
+    # also expand any other backslash sequence the model happened to emit, so a Windows
+    # path in the testing steps would come out with a tab in it.
+    BODY_JSON=${BODY//\\n/$'\n'}
+    PARAMETERS=$(jq -n \
+      --arg title "$PR_TITLE" \
+      --arg body  "$BODY_JSON" \
+      --arg head  "$BRANCH_NAME" \
+      --arg base  "$CIRCLE_BRANCH" \
+      '{title: $title, body: $body, head: $head, base: $base}')
+
+    # Running the request
+    response=$( \
+        curl -sw "%{http_code}" -L \
+        -X POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls \
+        -d "$PARAMETERS" \
+    )
+
+    # Extracting the HTTP status code from the response
+    http_status="${response: -3}"
+    response_body="${response%???}"
+
+    if [ "$http_status" == "200" -o "$http_status" == "201" ]; then
+      echo "Pull request: $PR_TITLE successfully created."
+      echo "-------------------------------------------"
+
+      # The PR number only exists once the PR does, so the environment links in the template
+      # have to be filled in with a follow-up update. Without this the placeholders ship
+      # literally in the body. Non-fatal: the PR itself is already created.
+      PR_NUMBER=$(echo "$response_body" | jq -r '.number // empty' 2>/dev/null || true)
+      if [ -n "$PR_NUMBER" ]; then
+        FINAL_BODY=${BODY//\[PR_NUMBER\]/$PR_NUMBER}
+        FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/$PR_NUMBER}
+        FINAL_BODY=${FINAL_BODY//\[PROJECT\]/$SITE_NAME}
+        # Same literal "\n" expansion as the create request above, and the same reason for
+        # preferring substitution over printf '%b'.
+        FINAL_BODY=${FINAL_BODY//\\n/$'\n'}
+        curl -sS -o /dev/null -L \
+          -X PATCH \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls/$PR_NUMBER \
+          -d "$(jq -n --arg body "$FINAL_BODY" '{body: $body}')" || true
+      fi
+    else
+      echo "Failed to create pull request: $PR_TITLE. HTTP status code: $http_status"
+      # Without this the response body is captured and thrown away, leaving a bare status
+      # code with no indication of what GitHub objected to.
+      echo "$response_body" | jq -r '[.message // empty] + [.errors[]?.message // empty] | .[]' 2>/dev/null \
+        || echo "$response_body"
+      echo "-------------------------------------------"
+      exit 1
+    fi
+  fi
+else
+  echo "Nothing to do! No available security updates."
+fi
