@@ -783,7 +783,16 @@ if [ -n "$PACKAGES" ]; then
     echo "Creating the update Pull request."
     echo "-------------------------------------------"
     if [ -z "$TICKET_URL" ]; then
-      TICKET_URL="_No ticket was created for this update._"
+      case "$TICKETING" in
+        clickup|productive)
+          # Configured but nothing came back: the provider script hit an error. Point at
+          # the job log, which has the reason, rather than leaving it to look intentional.
+          TICKET_URL="_No ticket was created: the ${TICKETING} ticket could not be created. See the job log${CIRCLE_BUILD_URL:+ ($CIRCLE_BUILD_URL)} for the reason._"
+          ;;
+        *)
+          TICKET_URL="_No ticket was created for this update._"
+          ;;
+      esac
     elif [ -n "$TICKET_REF" ]; then
       case "$TICKETING" in
         clickup)    TICKET_LABEL="ClickUp ${TICKET_REF}" ;;
