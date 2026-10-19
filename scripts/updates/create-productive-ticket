@@ -85,6 +85,19 @@ pr_get() {
   rm -f "$out"
 }
 
+# PATCH a task with a JSON:API body, printing the HTTP status.
+pr_patch_task() {
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" \
+    --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+    -X PATCH "${PR_API}/tasks/$1" \
+    -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+    -H "X-Organization-Id: ${PR_ORG_ID}" \
+    -H "Content-Type: application/vnd.api+json" \
+    -d "$2") || code="000"
+  printf '%s' "$code"
+}
+
 # What a failed GET is treated as, so jq always has a document to read.
 NO_DATA='{"data":[]}'
 
@@ -204,23 +217,46 @@ if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
       GOT_STATUS=$(jq -r '.data.relationships.workflow_status.data.id // .data.attributes.workflow_status_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
       if [ "$GOT_STATUS" != "$PR_STATUS_ID" ]; then
         log "Task opened in status ${GOT_STATUS:-unknown}, not ${PR_STATUS_ID}; updating it."
-        PATCH_HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-          --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
-          -X PATCH "${PR_API}/tasks/${TASK_ID}" \
-          -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
-          -H "X-Organization-Id: ${PR_ORG_ID}" \
-          -H "Content-Type: application/vnd.api+json" \
-          -d "$(jq -n --arg status "$PR_STATUS_ID" '{
-                data: {
-                  type: "tasks",
-                  attributes: { workflow_status_id: ($status | tonumber) },
-                  relationships: { workflow_status: { data: { type: "workflow_statuses", id: $status } } }
-                }
-              }')") || PATCH_HTTP="000"
+        PATCH_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --arg status "$PR_STATUS_ID" '{
+            data: {
+              type: "tasks",
+              attributes: { workflow_status_id: ($status | tonumber) },
+              relationships: { workflow_status: { data: { type: "workflow_statuses", id: $status } } }
+            }
+          }')" )
         if [ "$PATCH_HTTP" = "200" ]; then
           log "Task status set to ${PR_STATUS_ID}."
         else
           log "Warning: could not set the task status (HTTP ${PATCH_HTTP}); it stays in ${GOT_STATUS:-its default status}."
+        fi
+      fi
+    fi
+
+    # Productive subscribes whoever creates a task, which here is the API token's owner. On
+    # an automated ticket that is nobody in particular, so take them off: write back the
+    # subscriber list without the creator. Productive does not document whether a task
+    # GET returns subscriber_ids; when it does not, subscribe just the assignee -- the
+    # person the ticket is actually for -- or nobody. Non-fatal, like the status fix.
+    CREATOR_ID=$(jq -r '.data.relationships.creator.data.id // .data.attributes.creator_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+    if [ -n "$CREATOR_ID" ]; then
+      SUBSCRIBERS=$( pr_get "/tasks/${TASK_ID}" \
+        | jq -c '.data.attributes.subscriber_ids // empty | if type == "array" then map(tostring) else empty end' 2>/dev/null || true )
+      if [ -n "$SUBSCRIBERS" ]; then
+        # Unless the creator is also the assignee: then the ticket really is theirs.
+        KEEP=$( jq -c --arg c "$CREATOR_ID" --arg a "${PR_ASSIGNEE_ID:-}" \
+          'map(select(. != $c or . == $a))' <<<"$SUBSCRIBERS" )
+      else
+        log "Productive did not return the task's subscribers; leaving only the assignee subscribed."
+        KEEP=$( jq -nc --arg a "${PR_ASSIGNEE_ID:-}" 'if $a != "" then [$a] else [] end' )
+      fi
+      if [ "$KEEP" != "$SUBSCRIBERS" ]; then
+        SUB_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --argjson ids "$KEEP" '{
+            data: { type: "tasks", attributes: { subscriber_ids: ($ids | map(tonumber)) } }
+          }')" )
+        if [ "$SUB_HTTP" = "200" ]; then
+          log "Removed the ticket creator (person ${CREATOR_ID}) from the task's subscribers."
+        else
+          log "Warning: could not update the task's subscribers (HTTP ${SUB_HTTP}); the creator stays subscribed."
         fi
       fi
     fi

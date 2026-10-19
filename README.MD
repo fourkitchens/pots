@@ -1059,6 +1059,11 @@ in `update-data` so it can be set per-trigger.
 
    The task is due a week after it is created.
 
+   Productive subscribes whoever creates a task, which for AutoSec is the owner of
+   `PRODUCTIVE_TOKEN`. That person is taken off the task's subscribers right after it is
+   created, unless they are also its assignee. If Productive does not return the task's
+   subscriber list, only the assignee (or nobody) is left subscribed.
+
    The PR body links the task by its number (`Productive #123`).
 
 #### Finding the ids (with `PRODUCTIVE_TOKEN` set)
