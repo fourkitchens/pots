@@ -1098,6 +1098,10 @@ template has a blank line, because Productive puts no space between paragraphs. 
 `[PROJECTS]` on a line of its own in an overridden template to get the list. Left inline,
 it gets the old comma-separated form.
 
+The PR is opened before the ticket, so the ticket description can end with a link to it,
+under **Pull request ready for internal review**. The ticket link is then filled into the
+PR body. If the PR cannot be created the run fails before any ticket is opened.
+
 The title, the body and the default status live in `scripts/updates/ticket-lib.sh`, which
 both provider scripts source. It follows the usual override pattern at
 `.circleci/scripts/updates/ticket-lib.sh`. An overridden `create-<provider>-ticket` should

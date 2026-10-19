@@ -13,6 +13,9 @@
 #   UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
 #                    list_id, client_id, assignee_id (optional), status (optional).
 #   SITE_NAME  (env) Site name, used in the ticket title/body.
+#   PR_URL     (env) Optional. The pull request opened for these updates,
+#                    linked at the end of the ticket description. PR_NUMBER (env)
+#                    labels the link.
 #
 # Output:
 #   One line on stdout, "<reference><TAB><url>" -- the reference is the task's custom id,

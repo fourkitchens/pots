@@ -730,10 +730,71 @@ if [ -n "$PACKAGES" ]; then
       CONFIG_CHANGES="_No database updates or configuration changes came with these security updates._"
     fi
 
-    # Open a ticket first, so it can be linked in the PR body.
-    # The provider script gates itself on its own configuration, prints
-    # "<reference><TAB><url>" (nothing when it is unconfigured or its API call fails) and
-    # always exits 0, so ticketing can never fail the PR.
+    # The PR goes first, then the ticket, then the PR body is filled in. The ticket links
+    # the PR in its description, so the PR has to exist when the ticket is created; the
+    # PR body links the ticket, and that is filled in by the follow-up update the body
+    # needs anyway (the PR number only exists once the PR does). A PR that cannot be
+    # created ends the run before a ticket is opened for it.
+    echo "Creating the update Pull request."
+    echo "-------------------------------------------"
+    BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
+    BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
+    BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
+    BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
+    BODY=${BODY//\[FAILED_UPDATES\]/$FAILED_UPDATES}
+    BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
+    if [ ! -z "$SITE_NAME" ]; then
+      BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
+    fi
+    # The body carries free-form text -- the AI testing steps and the database/config
+    # summary -- so it can contain double quotes and backslashes. Hand-building the JSON
+    # with printf escaped newlines only, and a single quote in the model's output was
+    # enough to make GitHub reject the whole request with HTTP 400. Let jq encode it.
+    # The template's own sections carry literal "\n" escapes rather than real newlines,
+    # so turn those into real ones first. Substitution rather than printf '%b': %b would
+    # also expand any other backslash sequence the model happened to emit, so a Windows
+    # path in the testing steps would come out with a tab in it.
+    BODY_JSON=${BODY//\[TICKET_URL\]/_The ticket is being created._}
+    BODY_JSON=${BODY_JSON//\\n/$'\n'}
+    PARAMETERS=$(jq -n \
+      --arg title "$PR_TITLE" \
+      --arg body  "$BODY_JSON" \
+      --arg head  "$BRANCH_NAME" \
+      --arg base  "$CIRCLE_BRANCH" \
+      '{title: $title, body: $body, head: $head, base: $base}')
+
+    # Running the request
+    response=$( \
+        curl -sw "%{http_code}" -L \
+        -X POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer $GITHUB_TOKEN" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls \
+        -d "$PARAMETERS" \
+    )
+
+    # Extracting the HTTP status code from the response
+    http_status="${response: -3}"
+    response_body="${response%???}"
+
+    if [ "$http_status" != "200" ] && [ "$http_status" != "201" ]; then
+      echo "Failed to create pull request: $PR_TITLE. HTTP status code: $http_status"
+      # Without this the response body is captured and thrown away, leaving a bare status
+      # code with no indication of what GitHub objected to.
+      echo "$response_body" | jq -r '[.message // empty] + [.errors[]?.message // empty] | .[]' 2>/dev/null \
+        || echo "$response_body"
+      echo "-------------------------------------------"
+      exit 1
+    fi
+    echo "Pull request: $PR_TITLE successfully created."
+    echo "-------------------------------------------"
+    PR_NUMBER=$(echo "$response_body" | jq -r '.number // empty' 2>/dev/null || true)
+    PR_URL=$(echo "$response_body" | jq -r '.html_url // empty' 2>/dev/null || true)
+
+    # Open the ticket, linking the PR. The provider script gates itself on its own
+    # configuration, prints "<reference><TAB><url>" (nothing when it is unconfigured or
+    # its API call fails) and always exits 0, so ticketing can never fail the run.
     #
     # The provider comes from ticketing_system in the update-data blob, falling back to
     # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
@@ -762,7 +823,8 @@ if [ -n "$PACKAGES" ]; then
         fi
         TICKET_SCRIPT=$( pots_file "create-${TICKETING}-ticket" )
         if [ -x "$TICKET_SCRIPT" ]; then
-          TICKET_OUT=$( UPDATE_MODE="$UPDATE_MODE" "$TICKET_SCRIPT" "$PROJECTS_UPDATED" | tail -n 1 || true)
+          TICKET_OUT=$( UPDATE_MODE="$UPDATE_MODE" PR_URL="$PR_URL" PR_NUMBER="$PR_NUMBER" \
+            "$TICKET_SCRIPT" "$PROJECTS_UPDATED" | tail -n 1 || true)
           # An older consumer override prints just the URL, with no reference before it.
           if [[ "$TICKET_OUT" == *$'\t'* ]]; then
             TICKET_REF="${TICKET_OUT%%$'\t'*}"
@@ -779,9 +841,6 @@ if [ -n "$PACKAGES" ]; then
         ;;
     esac
 
-    # Create the PR, linking the ticket if one was created.
-    echo "Creating the update Pull request."
-    echo "-------------------------------------------"
     if [ -z "$TICKET_URL" ]; then
       case "$TICKETING" in
         clickup|productive)
@@ -802,78 +861,25 @@ if [ -n "$PACKAGES" ]; then
       # Inside the link text, GitHub does not mistake "#123" for an issue in this repo.
       TICKET_URL="[${TICKET_LABEL}](${TICKET_URL})"
     fi
-    BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
-    BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
-    BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
-    BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
-    BODY=${BODY//\[FAILED_UPDATES\]/$FAILED_UPDATES}
-    BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
-    BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
-    if [ ! -z "$SITE_NAME" ]; then
-      BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
-    fi
-    # The body carries free-form text -- the AI testing steps and the database/config
-    # summary -- so it can contain double quotes and backslashes. Hand-building the JSON
-    # with printf escaped newlines only, and a single quote in the model's output was
-    # enough to make GitHub reject the whole request with HTTP 400. Let jq encode it.
-    # The template's own sections carry literal "\n" escapes rather than real newlines,
-    # so turn those into real ones first. Substitution rather than printf '%b': %b would
-    # also expand any other backslash sequence the model happened to emit, so a Windows
-    # path in the testing steps would come out with a tab in it.
-    BODY_JSON=${BODY//\\n/$'\n'}
-    PARAMETERS=$(jq -n \
-      --arg title "$PR_TITLE" \
-      --arg body  "$BODY_JSON" \
-      --arg head  "$BRANCH_NAME" \
-      --arg base  "$CIRCLE_BRANCH" \
-      '{title: $title, body: $body, head: $head, base: $base}')
 
-    # Running the request
-    response=$( \
-        curl -sw "%{http_code}" -L \
-        -X POST \
+    # Fill in what only exists now: the ticket link and the PR number the environment
+    # links use. Without this the placeholders ship literally in the body. Non-fatal: the
+    # PR itself is already created.
+    if [ -n "$PR_NUMBER" ]; then
+      FINAL_BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
+      FINAL_BODY=${FINAL_BODY//\[PR_NUMBER\]/$PR_NUMBER}
+      FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/$PR_NUMBER}
+      FINAL_BODY=${FINAL_BODY//\[PROJECT\]/$SITE_NAME}
+      # Same literal "\n" expansion as the create request above, and the same reason for
+      # preferring substitution over printf '%b'.
+      FINAL_BODY=${FINAL_BODY//\\n/$'\n'}
+      curl -sS -o /dev/null -L \
+        -X PATCH \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: Bearer $GITHUB_TOKEN" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls \
-        -d "$PARAMETERS" \
-    )
-
-    # Extracting the HTTP status code from the response
-    http_status="${response: -3}"
-    response_body="${response%???}"
-
-    if [ "$http_status" == "200" -o "$http_status" == "201" ]; then
-      echo "Pull request: $PR_TITLE successfully created."
-      echo "-------------------------------------------"
-
-      # The PR number only exists once the PR does, so the environment links in the template
-      # have to be filled in with a follow-up update. Without this the placeholders ship
-      # literally in the body. Non-fatal: the PR itself is already created.
-      PR_NUMBER=$(echo "$response_body" | jq -r '.number // empty' 2>/dev/null || true)
-      if [ -n "$PR_NUMBER" ]; then
-        FINAL_BODY=${BODY//\[PR_NUMBER\]/$PR_NUMBER}
-        FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/$PR_NUMBER}
-        FINAL_BODY=${FINAL_BODY//\[PROJECT\]/$SITE_NAME}
-        # Same literal "\n" expansion as the create request above, and the same reason for
-        # preferring substitution over printf '%b'.
-        FINAL_BODY=${FINAL_BODY//\\n/$'\n'}
-        curl -sS -o /dev/null -L \
-          -X PATCH \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer $GITHUB_TOKEN" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls/$PR_NUMBER \
-          -d "$(jq -n --arg body "$FINAL_BODY" '{body: $body}')" || true
-      fi
-    else
-      echo "Failed to create pull request: $PR_TITLE. HTTP status code: $http_status"
-      # Without this the response body is captured and thrown away, leaving a bare status
-      # code with no indication of what GitHub objected to.
-      echo "$response_body" | jq -r '[.message // empty] + [.errors[]?.message // empty] | .[]' 2>/dev/null \
-        || echo "$response_body"
-      echo "-------------------------------------------"
-      exit 1
+        https://api.github.com/repos/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pulls/$PR_NUMBER \
+        -d "$(jq -n --arg body "$FINAL_BODY" '{body: $body}')" || true
     fi
   fi
 else

@@ -18,6 +18,9 @@
 #                         status (optional), workflow_status_id (optional),
 #                         task_url_template (optional).
 #   SITE_NAME       (env) Site name, used in the ticket title/body.
+#   PR_URL          (env) Optional. The pull request opened for these updates,
+#                         linked at the end of the ticket description. PR_NUMBER (env)
+#                         labels the link.
 #
 # Output:
 #   One line on stdout, "<reference><TAB><url>" -- the reference is the task number as
