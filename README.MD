@@ -1052,9 +1052,12 @@ in `update-data` so it can be set per-trigger.
    Optional relationships are omitted from the request entirely when unset — Productive
    rejects a relationship sent as null.
 
-   The status name is looked up, ignoring case, in the workflow the project uses. If the
-   workflow has no status by that name, a warning is logged and the task opens in
-   Productive's default status (usually Backlog).
+   The status name is looked up, ignoring case and spacing, among the statuses the project
+   uses. If there is no status by that name, a warning is logged with the names the project
+   does have, and the task opens in Productive's default status (usually Backlog). After the
+   task is created, its status is checked and corrected with an update if it did not take.
+
+   The task is due a week after it is created.
 
    The PR body links the task by its number (`Productive #123`).
 

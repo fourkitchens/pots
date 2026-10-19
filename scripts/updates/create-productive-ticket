@@ -66,50 +66,74 @@ fi
 PR_BODY_HTML=$( ticket_markdown "$PROJECTS_UPDATED" | ticket_markdown_to_html )
 PR_TICKET_TITLE="$( ticket_title )"
 
-# GET a Productive API path, printing the JSON body, or nothing on any failure. -g stops
-# curl reading the [] in filter[...] as a glob.
+# GET a Productive API path, printing the JSON body, or nothing on any failure -- which
+# is logged with its HTTP status, since a silent failure here is indistinguishable from
+# "not found". -g stops curl reading the [] in filter[...] as a glob.
 pr_get() {
-  local out
+  local out code
   out=$(mktemp)
-  if [ "$(curl -s -g -o "$out" -w "%{http_code}" --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+  code=$(curl -s -g -o "$out" -w "%{http_code}" --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
       -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
       -H "X-Organization-Id: ${PR_ORG_ID}" \
       -H "Content-Type: application/vnd.api+json" \
-      "${PR_API}$1")" = "200" ]; then
+      "${PR_API}$1") || code="000"
+  if [ "$code" = "200" ]; then
     cat "$out"
+  else
+    log "Productive GET ${1%%\?*} returned HTTP ${code}."
   fi
   rm -f "$out"
 }
 
+# What a failed GET is treated as, so jq always has a document to read.
+NO_DATA='{"data":[]}'
+
+# The workflow statuses that apply to the project, as JSON:API data. Productive filters
+# statuses by project directly; when that comes back empty, go through the project's
+# workflow instead.
+project_statuses() {
+  local statuses workflow_id
+  statuses=$( pr_get "/workflow_statuses?filter[project_id]=${PR_PROJECT_ID}&page[size]=200" )
+  if [ "$( jq -r '.data | length' <<<"${statuses:-$NO_DATA}" 2>/dev/null || echo 0 )" = "0" ]; then
+    workflow_id=$( pr_get "/projects/${PR_PROJECT_ID}" \
+      | jq -r '.data.attributes.workflow_id // .data.relationships.workflow.data.id // empty' 2>/dev/null || true )
+    if [ -n "$workflow_id" ]; then
+      statuses=$( pr_get "/workflow_statuses?filter[workflow_id]=${workflow_id}&page[size]=200" )
+    fi
+  fi
+  printf '%s' "$statuses"
+}
+
 # Open the task in a named status ("Ready for Dev" unless update-data says otherwise)
-# instead of the first one in the workflow, which is usually Backlog. Statuses belong to
-# the project's workflow, so look the name up there. workflow_status_id, when set, wins and
-# skips the lookup. A name the workflow does not have is logged and left out, so the task
-# is still created, in Productive's default status.
+# instead of the first one in the workflow, which is usually Backlog. workflow_status_id,
+# when set, wins and skips the lookup. Names are compared ignoring case and spacing. A
+# name the project does not have is logged, with the names it does have, and left out, so
+# the task is still created, in Productive's default status.
 if [ -z "${PR_STATUS_ID:-}" ]; then
   PR_STATUS_NAME="${PR_STATUS_NAME:-$TICKET_DEFAULT_STATUS}"
-  PR_WORKFLOW_ID=$( pr_get "/projects/${PR_PROJECT_ID}" \
-    | jq -r '.data.attributes.workflow_id // .data.relationships.workflow.data.id // empty' 2>/dev/null || true )
-  if [ -n "$PR_WORKFLOW_ID" ]; then
-    PR_STATUS_ID=$( pr_get "/workflow_statuses?filter[workflow_id]=${PR_WORKFLOW_ID}&page[size]=200" \
-      | jq -r --arg n "$PR_STATUS_NAME" \
-          '[.data[]? | select((.attributes.name | ascii_downcase) == ($n | ascii_downcase)) | .id][0] // empty' \
-          2>/dev/null || true )
-  fi
+  PR_STATUSES=$( project_statuses )
+  PR_STATUS_ID=$( jq -r --arg n "$PR_STATUS_NAME" '
+      def norm: ascii_downcase | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ");
+      [.data[]? | select((.attributes.name // "" | norm) == ($n | norm)) | .id][0] // empty
+    ' <<<"${PR_STATUSES:-$NO_DATA}" 2>/dev/null || true )
   if [ -n "$PR_STATUS_ID" ]; then
     log "Opening the task in status '${PR_STATUS_NAME}' (${PR_STATUS_ID})."
   else
     log "Warning: no workflow status named '${PR_STATUS_NAME}' found for project ${PR_PROJECT_ID}; using Productive's default status."
+    log "Statuses available to the project: $( jq -r '[.data[]?.attributes.name] | if length == 0 then "none returned" else join(", ") end' <<<"${PR_STATUSES:-$NO_DATA}" 2>/dev/null || echo "none returned" )"
   fi
 fi
 
-DUE_DATE="$(date +%F)"
+# Due a week after the ticket is opened. GNU date (CI) takes -d, BSD date (macOS, when
+# run by hand) takes -v.
+DUE_DATE="$( date -d '+7 days' +%F 2>/dev/null || date -v+7d +%F )"
 
 # Build the JSON:API request body with jq so quotes/newlines in the site name or project
 # list can never produce invalid JSON. Productive expects Content-Type
 # application/vnd.api+json with the type/attributes/relationships envelope. Everything
 # except project is optional, and each optional relationship is merged in only when set:
-# sending a null relationship is rejected.
+# sending a null relationship is rejected. The status also goes as the workflow_status_id
+# attribute, which is how Productive's current API reference documents it.
 PR_JSON_DATA=$(jq -n \
   --arg title "$PR_TICKET_TITLE" \
   --arg desc "$PR_BODY_HTML" \
@@ -127,7 +151,7 @@ PR_JSON_DATA=$(jq -n \
         description: $desc,
         due_date: $due,
         tag_list: ["autosec update"]
-      },
+      } + (if $status != "" then { workflow_status_id: ($status | tonumber) } else {} end),
       relationships: (
         { project: { data: { type: "projects", id: $project } } }
         + (if $task_list != "" then { task_list: { data: { type: "task_lists", id: $task_list } } } else {} end)
@@ -173,6 +197,33 @@ if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
       TICKET_REF="task ${TASK_ID}"
     fi
     log "Productive task ${TICKET_REF} created: ${TICKET_URL}"
+
+    # Make sure the status took. If Productive put the task somewhere else, set it with an
+    # update. Non-fatal either way: the task exists, and the link is what the PR needs.
+    if [ -n "${PR_STATUS_ID:-}" ]; then
+      GOT_STATUS=$(jq -r '.data.relationships.workflow_status.data.id // .data.attributes.workflow_status_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+      if [ "$GOT_STATUS" != "$PR_STATUS_ID" ]; then
+        log "Task opened in status ${GOT_STATUS:-unknown}, not ${PR_STATUS_ID}; updating it."
+        PATCH_HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+          --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+          -X PATCH "${PR_API}/tasks/${TASK_ID}" \
+          -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+          -H "X-Organization-Id: ${PR_ORG_ID}" \
+          -H "Content-Type: application/vnd.api+json" \
+          -d "$(jq -n --arg status "$PR_STATUS_ID" '{
+                data: {
+                  type: "tasks",
+                  attributes: { workflow_status_id: ($status | tonumber) },
+                  relationships: { workflow_status: { data: { type: "workflow_statuses", id: $status } } }
+                }
+              }')") || PATCH_HTTP="000"
+        if [ "$PATCH_HTTP" = "200" ]; then
+          log "Task status set to ${PR_STATUS_ID}."
+        else
+          log "Warning: could not set the task status (HTTP ${PATCH_HTTP}); it stays in ${GOT_STATUS:-its default status}."
+        fi
+      fi
+    fi
     printf '%s\t%s\n' "$TICKET_REF" "$TICKET_URL"   # the only stdout: the caller captures this
   fi
 else
