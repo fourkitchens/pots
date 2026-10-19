@@ -98,6 +98,15 @@ pr_patch_task() {
   printf '%s' "$code"
 }
 
+# Is the task's creator subscribed to it? Uses TASK_ID and CREATOR_ID. A failed request
+# answers "no", so a broken lookup can never trigger a subscriber change.
+creator_subscribed() {
+  local count
+  count=$( pr_get "/tasks?filter[id]=${TASK_ID}&filter[subscriber_id]=${CREATOR_ID}" \
+    | jq -r '.meta.total_count // 0' 2>/dev/null || true )
+  [ "${count:-0}" -gt 0 ] 2>/dev/null
+}
+
 # What a failed GET is treated as, so jq always has a document to read.
 NO_DATA='{"data":[]}'
 
@@ -211,10 +220,15 @@ if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
     fi
     log "Productive task ${TICKET_REF} created: ${TICKET_URL}"
 
+    # Read the task back. Productive leaves relationships empty ("included": false) unless
+    # they are asked for with ?include=, and the create response does not ask, so this is
+    # the only way to learn the task's real status and who created it.
+    TASK_JSON=$( pr_get "/tasks/${TASK_ID}?include=creator,workflow_status" )
+
     # Make sure the status took. If Productive put the task somewhere else, set it with an
     # update. Non-fatal either way: the task exists, and the link is what the PR needs.
     if [ -n "${PR_STATUS_ID:-}" ]; then
-      GOT_STATUS=$(jq -r '.data.relationships.workflow_status.data.id // .data.attributes.workflow_status_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+      GOT_STATUS=$(jq -r '.data.relationships.workflow_status.data.id // empty' <<<"${TASK_JSON:-$NO_DATA}" 2>/dev/null || true)
       if [ "$GOT_STATUS" != "$PR_STATUS_ID" ]; then
         log "Task opened in status ${GOT_STATUS:-unknown}, not ${PR_STATUS_ID}; updating it."
         PATCH_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --arg status "$PR_STATUS_ID" '{
@@ -233,31 +247,28 @@ if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
     fi
 
     # Productive subscribes whoever creates a task, which here is the API token's owner. On
-    # an automated ticket that is nobody in particular, so take them off: write back the
-    # subscriber list without the creator. Productive does not document whether a task
-    # GET returns subscriber_ids; when it does not, subscribe just the assignee -- the
-    # person the ticket is actually for -- or nobody. Non-fatal, like the status fix.
-    CREATOR_ID=$(jq -r '.data.relationships.creator.data.id // .data.attributes.creator_id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
-    if [ -n "$CREATOR_ID" ]; then
-      SUBSCRIBERS=$( pr_get "/tasks/${TASK_ID}" \
-        | jq -c '.data.attributes.subscriber_ids // empty | if type == "array" then map(tostring) else empty end' 2>/dev/null || true )
-      if [ -n "$SUBSCRIBERS" ]; then
-        # Unless the creator is also the assignee: then the ticket really is theirs.
-        KEEP=$( jq -c --arg c "$CREATOR_ID" --arg a "${PR_ASSIGNEE_ID:-}" \
-          'map(select(. != $c or . == $a))' <<<"$SUBSCRIBERS" )
+    # an automated ticket that is nobody in particular, so take them off -- unless they are
+    # also the assignee, in which case the ticket really is theirs.
+    #
+    # Productive never returns a task's subscriber list, so there is no list to take one
+    # person out of. What it does offer: filter[subscriber_id] answers "is this person
+    # subscribed?", and the subscriber_ids attribute can be written. So check the creator,
+    # and if they are subscribed, write the list the ticket should have: the assignee, or
+    # nobody. Then check again, because a 200 alone does not prove the change took.
+    # Non-fatal, like the status fix.
+    CREATOR_ID=$(jq -r '.data.relationships.creator.data.id // empty' <<<"${TASK_JSON:-$NO_DATA}" 2>/dev/null || true)
+    if [ -z "$CREATOR_ID" ]; then
+      log "Warning: could not tell who created the task; leaving its subscribers as they are."
+    elif [ "$CREATOR_ID" != "${PR_ASSIGNEE_ID:-}" ] && creator_subscribed; then
+      SUB_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --arg a "${PR_ASSIGNEE_ID:-}" '{
+          data: { type: "tasks", attributes: { subscriber_ids: (if $a != "" then [$a | tonumber] else [] end) } }
+        }')" )
+      if [ "$SUB_HTTP" != "200" ]; then
+        log "Warning: could not update the task's subscribers (HTTP ${SUB_HTTP}); the creator stays subscribed."
+      elif creator_subscribed; then
+        log "Warning: Productive accepted the subscriber change, but the creator (person ${CREATOR_ID}) is still subscribed."
       else
-        log "Productive did not return the task's subscribers; leaving only the assignee subscribed."
-        KEEP=$( jq -nc --arg a "${PR_ASSIGNEE_ID:-}" 'if $a != "" then [$a] else [] end' )
-      fi
-      if [ "$KEEP" != "$SUBSCRIBERS" ]; then
-        SUB_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --argjson ids "$KEEP" '{
-            data: { type: "tasks", attributes: { subscriber_ids: ($ids | map(tonumber)) } }
-          }')" )
-        if [ "$SUB_HTTP" = "200" ]; then
-          log "Removed the ticket creator (person ${CREATOR_ID}) from the task's subscribers."
-        else
-          log "Warning: could not update the task's subscribers (HTTP ${SUB_HTTP}); the creator stays subscribed."
-        fi
+        log "Removed the ticket creator (person ${CREATOR_ID}) from the task's subscribers."
       fi
     fi
     printf '%s\t%s\n' "$TICKET_REF" "$TICKET_URL"   # the only stdout: the caller captures this
