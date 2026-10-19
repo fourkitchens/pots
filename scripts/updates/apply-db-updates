@@ -115,8 +115,10 @@ if [ -n "$HOOKS" ]; then
 else
   echo "- **$PROJECT** — exported $CHANGED_COUNT configuration file(s):"
 fi
-# List the files, capped so a large export cannot swamp the PR body.
-printf '%s\n' "$CHANGED" | awk '{ print $NF }' | sed "s|^|  - \`|;s|$|\`|" | head -20
+# List the files, capped so a large export cannot swamp the PR body. The cap is applied
+# inside awk, which reads its whole input: a `| head -20` closes the pipe early, and with
+# a few hundred files the writer then dies of SIGPIPE, which pipefail turns into exit 141.
+printf '%s\n' "$CHANGED" | awk 'NR <= 20 { print "  - `" $NF "`" }'
 if [ "$CHANGED_COUNT" -gt 20 ]; then
   echo "  - _...and $(( CHANGED_COUNT - 20 )) more._"
 fi

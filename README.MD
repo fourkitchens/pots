@@ -1343,6 +1343,18 @@ planned project. When a core advisory has no fix left in the installed major, th
 so in the PR and the ticket and leaves the site where it is, rather than taking the
 decision on its own.
 
+**Only packages `composer.json` declares get a constraint rewritten.** A package in
+`require-dev` is raised there, with `--dev`. A package that is only installed as a
+dependency of another one (a vulnerable `drupal/ctools` pulled in by a contrib module) is
+never added to `composer.json`: that would pin it as a root dependency long after the module
+that needed it dropped it. It is reported in the PR and the ticket instead, naming the
+package that requires it, because the fix is to update that package.
+
+**When nothing could be updated, the job fails.** If packages were selected but every one
+of them failed or was left where it was for a recorded reason, there is no commit and so no
+PR to report them in. The job then fails and lists each package with its reason, so an
+unapplied security update is noticed rather than passing as "Nothing to update".
+
 Set `UPDATE_ALLOW_UNSUPPORTED_MAJORS=NO` to switch the composer-mode exception off
 entirely.
 

@@ -210,7 +210,10 @@ if [ -s "$STATE_DIR/allow-major" ]; then
   done < "$STATE_DIR/allow-major"
   # Majors being applied are no longer "blocked"; leave only the ones a human must plan.
   if [ -s "$STATE_DIR/blocked" ]; then
-    grep -vFf <( cut -f1 "$STATE_DIR/allow-major" ) "$STATE_DIR/blocked" > "$STATE_DIR/blocked.tmp" 2>/dev/null || true
+    # Match the whole package name (field 1), never a substring: allowing drupal/token
+    # must not also hide the blocked major for drupal/token_filter.
+    awk 'NR == FNR { allowed[$1]; next } !($1 in allowed)' \
+      <( cut -f1 "$STATE_DIR/allow-major" ) "$STATE_DIR/blocked" > "$STATE_DIR/blocked.tmp" 2>/dev/null || true
     mv "$STATE_DIR/blocked.tmp" "$STATE_DIR/blocked" 2>/dev/null || true
   fi
 fi

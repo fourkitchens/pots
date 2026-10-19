@@ -377,10 +377,16 @@ core_constraint_entries() {
 # splits it across versions. require-dev entries are raised with --dev, and only
 # when installed: CI runs `composer install --no-dev`, so requiring an absent one
 # would fail the run over a package that is not even there.
+#
+# Any other package is raised in the section composer.json declares it in. One that is
+# not declared at all is only there as a dependency of something else: requiring it would
+# add a root dependency the project never had, and pin it there after the package that
+# pulled it in drops it. That is left alone, with the reason in RAISE_SKIP_REASON.
 raise_constraint_to_major() {           # $1 label, $2 major
   local label="$1" major="$2" rc=0 section name
   local prod=() dev=()
   RAISE_LOG="$UPDATE_STATE_DIR/raise-$( printf '%s' "$label" | tr '/*' '--' ).log"
+  RAISE_SKIP_REASON=""
   : > "$RAISE_LOG"
   if [ "$IS_CORE_GROUP" = "yes" ]; then
     while IFS=$'\t' read -r section name; do
@@ -397,7 +403,23 @@ raise_constraint_to_major() {           # $1 label, $2 major
       fi
     done < <( core_constraint_entries )
   else
-    prod=( "${label}:^${major}.0" )
+    section="$( jq -r --arg p "$label" '
+      if (.require // {} | has($p)) then "require"
+      elif (.["require-dev"] // {} | has($p)) then "require-dev"
+      else empty end' composer.json 2>/dev/null )"
+    case "$section" in
+      require)     prod=( "${label}:^${major}.0" ) ;;
+      require-dev) dev=( "${label}:^${major}.0" ) ;;
+      *)
+        local parents
+        parents="$( oneline "$( $COMPOSER_CMD why "$label" --no-interaction 2>/dev/null \
+          | awk '{ print $1 }' | sort -u | head -n 3 | tr '\n' ' ' )" )"
+        RAISE_SKIP_REASON="${label} is not required directly in composer.json; it is installed as a dependency of another package${parents:+ (${parents})}. Moving it to ^${major}.0 has to come from updating the package that requires it, so no constraint was added for it."
+        printf '%s\n' "$RAISE_SKIP_REASON" >> "$RAISE_LOG"
+        cat "$RAISE_LOG" >&2
+        return 1
+        ;;
+    esac
   fi
   if [ ${#prod[@]} -eq 0 ] && [ ${#dev[@]} -eq 0 ]; then
     printf '%s\n' "No composer.json constraint found for ${label}." >> "$RAISE_LOG"
@@ -440,6 +462,14 @@ if [ -n "$PACKAGES" ]; then
   if [[ "${UPDATE_RUN_DB_UPDATES:-YES}" != "NO" ]]; then
     echo "Preparing the Drupal environment for database updates..."
     "$( pots_file setup-drupal-env )" || true
+    # Neither outcome recorded means the setup died without saying why. Left like that,
+    # apply-db-updates skips every package quietly and the PR claims no database updates
+    # came with them, so record it the way setup-drupal-env would have.
+    if [ ! -f "$UPDATE_STATE_DIR/env" ] && [ ! -f "$UPDATE_STATE_DIR/disabled" ]; then
+      printf '%s\n' "Preparing the Drupal environment failed without recording a reason (see the job log${CIRCLE_BUILD_URL:+: $CIRCLE_BUILD_URL}), so no database updates were run and no configuration was exported. Run the database updates and export the configuration by hand before merging." \
+        >> "$UPDATE_STATE_DIR/notes"
+      : > "$UPDATE_STATE_DIR/disabled"
+    fi
   else
     echo "UPDATE_RUN_DB_UPDATES is 'NO'. Skipping database updates and configuration export."
     : > "$UPDATE_STATE_DIR/disabled"
@@ -552,7 +582,7 @@ if [ -n "$PACKAGES" ]; then
               [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
               MAJOR_UPGRADE_NOTE="  - :arrow_up: Constraint widened to \`^${CUR_MAJOR}.0\` to reach $( normalise_version "$( installed_version "$PROJECT_LABEL" )" ), the newest release in the current major. No major upgrade was needed."
             else
-              record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available within ${CUR_MAJOR}.x but the constraint could not be widened: $( summarise_composer_failure "$RAISE_LOG" )" )"
+              record_failure "$PROJECT_LABEL" "$( oneline "${IN_MAJOR} is available within ${CUR_MAJOR}.x but the constraint could not be widened: ${RAISE_SKIP_REASON:-$( summarise_composer_failure "$RAISE_LOG" )}" )"
             fi
 
           elif version_gt "$IN_MAJOR" "$CURRENT"; then
@@ -602,11 +632,14 @@ if [ -n "$PACKAGES" ]; then
                 printf '%s\n' "$PROJECT_LABEL ${LANDED} -> ${FURTHER}.x" >> "$UPDATE_STATE_DIR/blocked"
               fi
               if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
-                MAJOR_UPGRADE_NOTE+="\n  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
+                MAJOR_UPGRADE_NOTE+=$'\n'"  - :warning: $PROJECT_LABEL is **still flagged by \`composer audit\`** after the major upgrade. It needs attention by hand."
               fi
             else
               record_failure "$PROJECT_LABEL" "$( oneline "Asked composer for ^${NEXT_MAJOR}.0 but it resolved ${LANDED:-nothing}. Check this one by hand." )"
             fi
+          elif [ -n "$RAISE_SKIP_REASON" ]; then
+            record_failure "$PROJECT_LABEL" "$( oneline "Needed a major upgrade to ^${NEXT_MAJOR}.0 (${MAJOR_REASON}), but ${RAISE_SKIP_REASON}" )"
+            printf '%s\n' "$PROJECT_LABEL ${CURRENT} -> ${NEXT_MAJOR}.x" >> "$UPDATE_STATE_DIR/blocked"
           else
             record_failure "$PROJECT_LABEL" "$( oneline "Needed a major upgrade to ^${NEXT_MAJOR}.0 (${MAJOR_REASON}), but composer could not resolve it: $( summarise_composer_failure "$RAISE_LOG" )" )"
           fi
@@ -616,8 +649,11 @@ if [ -n "$PACKAGES" ]; then
         fi
       fi
     fi
-    # Check for any changes
-    if [[ `git status --porcelain` ]]; then
+    # Check for changes to what is about to be committed. Only composer.* is staged, so
+    # the check is scoped to it: setup-drupal-env leaves other files dirty (the CI settings
+    # file, config_split directories), and a package that did not move would otherwise
+    # reach `git commit` with nothing staged and abort the run under set -e.
+    if [[ `git status --porcelain -- composer.json composer.lock` ]]; then
         #committing recent changes.
         git add composer.*
         git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL"
@@ -626,7 +662,7 @@ if [ -n "$PACKAGES" ]; then
         # they changed. Always exits 0; prints a Markdown summary for the PR body.
         DB_SUMMARY=$( "$( pots_file apply-db-updates )" "$PROJECT_LABEL" )
         if [ -n "$DB_SUMMARY" ]; then
-          CONFIG_CHANGES+="${DB_SUMMARY}\n"
+          CONFIG_CHANGES+="${DB_SUMMARY}"$'\n'
         fi
 
         # Building PR information.
@@ -643,10 +679,10 @@ if [ -n "$PACKAGES" ]; then
         else
           AUX="- Update the contrib module: [${PROJECT_LABEL}](https://www.drupal.org/project/${AUX}/releases)."
         fi
-        MESSAGE+="${AUX}\n"
+        MESSAGE+="${AUX}"$'\n'
         # Flag a crossed major boundary directly under the package it applies to.
         if [ -n "$MAJOR_UPGRADE_NOTE" ]; then
-          MESSAGE+="${MAJOR_UPGRADE_NOTE}\n"
+          MESSAGE+="${MAJOR_UPGRADE_NOTE}"$'\n'
         fi
         # AI-generated testing steps (optional). A failure here must never abort the
         # update run, so the call is non-fatal and we only append when it returned text.
@@ -664,8 +700,8 @@ if [ -n "$PACKAGES" ]; then
           fi
           OPENAI_RESPONSE=$(openai_request "$OPENAI_API_KEY" "$PROMPT_TEXT" || true)
           if [ -n "$OPENAI_RESPONSE" ]; then
-            TEST_STEPS+="### AI testing instructions for the project ${PROJECT_LABEL}:\n"
-            TEST_STEPS+="${OPENAI_RESPONSE}\n"
+            TEST_STEPS+="### AI testing instructions for the project ${PROJECT_LABEL}:"$'\n'
+            TEST_STEPS+="${OPENAI_RESPONSE}"$'\n'
           fi
         fi
         echo "Updated $PROJECT_LABEL"
@@ -678,7 +714,16 @@ if [ -n "$PACKAGES" ]; then
   cd $DIR
 
   # Create the ticket + the PR.
-  if [ -z "$MESSAGE" ]
+  if [ -z "$MESSAGE" ] && [ -s "$UPDATE_STATE_DIR/failed" ]; then
+    # Packages were selected but none of them could be updated. With nothing committed
+    # there is no PR to report them in, so fail the job instead: a security update that
+    # silently does not happen is exactly what this run exists to prevent.
+    echo "None of the selected packages could be updated:" >&2
+    while IFS=$'\t' read -r FNAME FREASON; do
+      [ -n "$FNAME" ] && echo "  - ${FNAME}: ${FREASON}" >&2
+    done < "$UPDATE_STATE_DIR/failed"
+    exit 1
+  elif [ -z "$MESSAGE" ]
   then
     echo "Nothing to update."
   else
@@ -686,12 +731,35 @@ if [ -n "$PACKAGES" ]; then
     echo "-------------------------------------------"
     git push --set-upstream origin $BRANCH_NAME
 
+    # The provider comes from ticketing_system in the update-data blob, falling back to
+    # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
+    # with two separate defaults is how the two halves drift apart. Resolved before the PR
+    # body is built, so the warning below lands in the notes the body is made from.
+    TICKETING="$( resolve_ticketing_system )"
+    echo "Ticketing system: ${TICKETING}"
+    case "$TICKETING" in
+      clickup|productive)
+        # A default nobody chose, with no token behind it, would otherwise skip ticketing
+        # in complete silence -- the provider scripts exit 0 by design so they can never
+        # fail the PR. Say so in the job log and in the PR.
+        if ticketing_system_was_defaulted; then
+          TICKET_TOKEN_VAR="CU_TOKEN"
+          [ "$TICKETING" = "productive" ] && TICKET_TOKEN_VAR="PRODUCTIVE_TOKEN"
+          eval "TICKET_TOKEN=\${${TICKET_TOKEN_VAR}:-}"
+          if [ -z "$TICKET_TOKEN" ]; then
+            echo "WARNING: no ticketing system was specified and the default (${TICKETING}) has no ${TICKET_TOKEN_VAR}; no ticket will be created." >&2
+            printf '%s\n' "No ticketing system was specified in update-data or TICKETING_SYSTEM, so the default (${TICKETING}) was used - but ${TICKET_TOKEN_VAR} is not set, so no ticket was created. Set ticketing_system in the trigger POST, or add the token." \
+              >> "$UPDATE_STATE_DIR/notes"
+          fi
+        fi
+        ;;
+    esac
 
     # Fold the database/configuration results, and any warnings the database phase
     # recorded, into one section of the PR body.
     if [ -f "$UPDATE_STATE_DIR/notes" ]; then
       while IFS= read -r LINE; do
-        [ -n "$LINE" ] && CONFIG_CHANGES+="- :warning: ${LINE}\n"
+        [ -n "$LINE" ] && CONFIG_CHANGES+="- :warning: ${LINE}"$'\n'
       done < "$UPDATE_STATE_DIR/notes"
     fi
     # Major upgrades the selector deliberately did not apply. Surfacing them is the point:
@@ -699,7 +767,7 @@ if [ -n "$PACKAGES" ]; then
     BLOCKED_UPDATES=""
     if [ -s "$UPDATE_STATE_DIR/blocked" ]; then
       while IFS= read -r LINE; do
-        [ -n "$LINE" ] && BLOCKED_UPDATES+="- \`${LINE}\`\n"
+        [ -n "$LINE" ] && BLOCKED_UPDATES+="- \`${LINE}\`"$'\n'
       done < "$UPDATE_STATE_DIR/blocked"
     fi
     if [ -z "$BLOCKED_UPDATES" ]; then
@@ -714,8 +782,8 @@ if [ -n "$PACKAGES" ]; then
     if [ -s "$UPDATE_STATE_DIR/failed" ]; then
       while IFS=$'\t' read -r FNAME FREASON; do
         [ -z "$FNAME" ] && continue
-        FAILED_UPDATES+="- :x: \`${FNAME}\` - ${FREASON}\n"
-        FAILED_PLAIN+="- ${FNAME}: ${FREASON}\n"
+        FAILED_UPDATES+="- :x: \`${FNAME}\` - ${FREASON}"$'\n'
+        FAILED_PLAIN+="- ${FNAME}: ${FREASON}"$'\n'
       done < "$UPDATE_STATE_DIR/failed"
     fi
     if [ -z "$FAILED_UPDATES" ]; then
@@ -738,24 +806,29 @@ if [ -n "$PACKAGES" ]; then
     echo "Creating the update Pull request."
     echo "-------------------------------------------"
     BODY=$(cat "$( pots_file "$PR_TEMPLATE" )")
-    BODY=${BODY//\[UPDATED_MODULES\]/$MESSAGE}
-    BODY=${BODY//\[CONFIG_CHANGES\]/$CONFIG_CHANGES}
-    BODY=${BODY//\[BLOCKED_UPDATES\]/$BLOCKED_UPDATES}
-    BODY=${BODY//\[FAILED_UPDATES\]/$FAILED_UPDATES}
-    BODY=${BODY//\[ADDITIONAL_TESTING\]/$TEST_STEPS}
+    # Every section this script fills in is built with real newlines. An overridden
+    # template may still carry literal "\n" escapes, so expand those in the template text
+    # only, BEFORE anything is substituted into it: expanding them across the finished body
+    # also rewrote every backslash-n in the AI output and composer's messages, turning
+    # "\Drupal\node\NodeInterface" into a line break. Substitution rather than printf '%b':
+    # %b would also expand every other backslash sequence.
+    BODY=${BODY//\\n/$'\n'}
+    # The replacements are quoted: since bash 5.2 (patsub_replacement, on by default) an
+    # unquoted replacement turns every "&" in it into the matched placeholder, so "Save &
+    # continue" in the testing steps would come out as "Save [ADDITIONAL_TESTING] continue".
+    BODY=${BODY//\[UPDATED_MODULES\]/"$MESSAGE"}
+    BODY=${BODY//\[CONFIG_CHANGES\]/"$CONFIG_CHANGES"}
+    BODY=${BODY//\[BLOCKED_UPDATES\]/"$BLOCKED_UPDATES"}
+    BODY=${BODY//\[FAILED_UPDATES\]/"$FAILED_UPDATES"}
+    BODY=${BODY//\[ADDITIONAL_TESTING\]/"$TEST_STEPS"}
     if [ ! -z "$SITE_NAME" ]; then
-      BODY=${BODY//\[PROJECT_NAME\]/$SITE_NAME}
+      BODY=${BODY//\[PROJECT_NAME\]/"$SITE_NAME"}
     fi
     # The body carries free-form text -- the AI testing steps and the database/config
     # summary -- so it can contain double quotes and backslashes. Hand-building the JSON
     # with printf escaped newlines only, and a single quote in the model's output was
     # enough to make GitHub reject the whole request with HTTP 400. Let jq encode it.
-    # The template's own sections carry literal "\n" escapes rather than real newlines,
-    # so turn those into real ones first. Substitution rather than printf '%b': %b would
-    # also expand any other backslash sequence the model happened to emit, so a Windows
-    # path in the testing steps would come out with a tab in it.
     BODY_JSON=${BODY//\[TICKET_URL\]/_The ticket is being created._}
-    BODY_JSON=${BODY_JSON//\\n/$'\n'}
     PARAMETERS=$(jq -n \
       --arg title "$PR_TITLE" \
       --arg body  "$BODY_JSON" \
@@ -795,32 +868,14 @@ if [ -n "$PACKAGES" ]; then
     # Open the ticket, linking the PR. The provider script gates itself on its own
     # configuration, prints "<reference><TAB><url>" (nothing when it is unconfigured or
     # its API call fails) and always exits 0, so ticketing can never fail the run.
-    #
-    # The provider comes from ticketing_system in the update-data blob, falling back to
-    # the TICKETING_SYSTEM env var and then to productive. Resolved once: reading it twice
-    # with two separate defaults is how the two halves drift apart.
+    # TICKETING was resolved before the PR body was built.
     TICKET_URL=""
     TICKET_REF=""
-    TICKETING="$( resolve_ticketing_system )"
-    echo "Ticketing system: ${TICKETING}"
     case "$TICKETING" in
       none)
         echo "Ticketing is disabled (ticketing_system=none)."
         ;;
       clickup|productive)
-        # A default nobody chose, with no token behind it, would otherwise skip ticketing
-        # in complete silence -- the provider scripts exit 0 by design so they can never
-        # fail the PR. Say so in the job log and in the PR.
-        if ticketing_system_was_defaulted; then
-          TICKET_TOKEN_VAR="CU_TOKEN"
-          [ "$TICKETING" = "productive" ] && TICKET_TOKEN_VAR="PRODUCTIVE_TOKEN"
-          eval "TICKET_TOKEN=\${${TICKET_TOKEN_VAR}:-}"
-          if [ -z "$TICKET_TOKEN" ]; then
-            echo "WARNING: no ticketing system was specified and the default (${TICKETING}) has no ${TICKET_TOKEN_VAR}; no ticket will be created." >&2
-            printf '%s\n' "No ticketing system was specified in update-data or TICKETING_SYSTEM, so the default (${TICKETING}) was used - but ${TICKET_TOKEN_VAR} is not set, so no ticket was created. Set ticketing_system in the trigger POST, or add the token." \
-              >> "$UPDATE_STATE_DIR/notes"
-          fi
-        fi
         TICKET_SCRIPT=$( pots_file "create-${TICKETING}-ticket" )
         if [ -x "$TICKET_SCRIPT" ]; then
           TICKET_OUT=$( UPDATE_MODE="$UPDATE_MODE" PR_URL="$PR_URL" PR_NUMBER="$PR_NUMBER" \
@@ -866,13 +921,11 @@ if [ -n "$PACKAGES" ]; then
     # links use. Without this the placeholders ship literally in the body. Non-fatal: the
     # PR itself is already created.
     if [ -n "$PR_NUMBER" ]; then
-      FINAL_BODY=${BODY//\[TICKET_URL\]/$TICKET_URL}
-      FINAL_BODY=${FINAL_BODY//\[PR_NUMBER\]/$PR_NUMBER}
-      FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/$PR_NUMBER}
-      FINAL_BODY=${FINAL_BODY//\[PROJECT\]/$SITE_NAME}
-      # Same literal "\n" expansion as the create request above, and the same reason for
-      # preferring substitution over printf '%b'.
-      FINAL_BODY=${FINAL_BODY//\\n/$'\n'}
+      # Quoted replacements, for the same patsub_replacement reason as above.
+      FINAL_BODY=${BODY//\[TICKET_URL\]/"$TICKET_URL"}
+      FINAL_BODY=${FINAL_BODY//\[PR_NUMBER\]/"$PR_NUMBER"}
+      FINAL_BODY=${FINAL_BODY//\[PR-NUMBER\]/"$PR_NUMBER"}
+      FINAL_BODY=${FINAL_BODY//\[PROJECT\]/"$SITE_NAME"}
       curl -sS -o /dev/null -L \
         -X PATCH \
         -H "Accept: application/vnd.github+json" \

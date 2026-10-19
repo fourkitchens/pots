@@ -59,11 +59,15 @@ if ! { [ -n "${PRODUCTIVE_TOKEN:-}" ] && [ -n "${PR_ORG_ID:-}" ] && [ -n "${PR_P
 fi
 
 # Title, body and default status are shared with create-clickup-ticket.
-if [ -f "./.circleci/scripts/updates/ticket-lib.sh" ]; then
-  source "./.circleci/scripts/updates/ticket-lib.sh"
-else
-  source "$(dirname "$0")/ticket-lib.sh"
-fi
+# Consumer override, else the vendored copy, else the copy beside this script (running
+# from a POTS checkout). Never only this script's directory: an overridden ticket script
+# runs from .circleci/scripts/updates/, where ticket-lib.sh does not exist.
+for TICKET_LIB in ./.circleci/scripts/updates/ticket-lib.sh \
+                  ./vendor/fourkitchens/pots/scripts/updates/ticket-lib.sh \
+                  "$(dirname "$0")/ticket-lib.sh"; do
+  [ -f "$TICKET_LIB" ] && break
+done
+source "$TICKET_LIB"
 
 # Productive renders the task description as HTML.
 PR_BODY_HTML=$( ticket_markdown "$PROJECTS_UPDATED" | ticket_markdown_to_html )

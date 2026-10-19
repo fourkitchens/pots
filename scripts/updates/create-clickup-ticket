@@ -52,11 +52,15 @@ if ! { [ -n "${CU_TOKEN:-}" ] && [ -n "${CU_LIST_ID:-}" ] && [ -n "${CU_CLIENT_I
 fi
 
 # Title, body and default status are shared with create-productive-ticket.
-if [ -f "./.circleci/scripts/updates/ticket-lib.sh" ]; then
-  source "./.circleci/scripts/updates/ticket-lib.sh"
-else
-  source "$(dirname "$0")/ticket-lib.sh"
-fi
+# Consumer override, else the vendored copy, else the copy beside this script (running
+# from a POTS checkout). Never only this script's directory: an overridden ticket script
+# runs from .circleci/scripts/updates/, where ticket-lib.sh does not exist.
+for TICKET_LIB in ./.circleci/scripts/updates/ticket-lib.sh \
+                  ./vendor/fourkitchens/pots/scripts/updates/ticket-lib.sh \
+                  "$(dirname "$0")/ticket-lib.sh"; do
+  [ -f "$TICKET_LIB" ] && break
+done
+source "$TICKET_LIB"
 
 # ClickUp renders Markdown natively, so the body goes as-is.
 CU_BODY_MESSAGE=$( ticket_markdown "$PROJECTS_UPDATED" )

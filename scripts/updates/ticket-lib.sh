@@ -19,27 +19,34 @@ ticket_title() {
   fi
 }
 
-# Resolve the ticket template: consumer override, else the copy beside the calling script.
+# Resolve the ticket template: consumer override, else the vendored copy, else the copy
+# beside the calling script (running from a POTS checkout, where there is no vendor/).
+# Never only the calling script's directory: a consumer who overrides just the ticket
+# script runs it from .circleci/scripts/updates/, where the template does not exist.
 # The wording differs between a security run and a routine maintenance run, so the template
 # is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
 ticket_template() {
-  local name="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md"
-  if [ -f "./.circleci/scripts/updates/${name}" ]; then
-    printf '%s' "./.circleci/scripts/updates/${name}"
-  else
-    printf '%s' "$(dirname "$0")/${name}"
-  fi
+  local name="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md" candidate
+  for candidate in "./.circleci/scripts/updates/${name}" \
+                   "./vendor/fourkitchens/pots/scripts/updates/${name}" \
+                   "$(dirname "$0")/${name}"; do
+    if [ -f "$candidate" ]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  printf '%s' "$(dirname "$0")/${name}"
 }
 
 # ticket_markdown PROJECTS_UPDATED
 #
 # The ticket body as Markdown. PROJECTS_UPDATED is run-update's "core, webform, " list.
 # UPDATE_FAILURES (env) holds one "- name: reason" line per package the run could not
-# update, with literal "\n" separators, or "None.". PR_URL and PR_NUMBER (env) are the
+# update, or "None.". PR_URL and PR_NUMBER (env) are the
 # pull request run-update opened for these updates; when set, the body ends with a link
 # to it.
 ticket_markdown() {
-  local projects="$1" body projects_md failures_md="" line name reason
+  local projects="$1" body projects_md failures_md="" failures line name reason
 
   # One bullet per project, instead of a run-on "core, webform," sentence.
   projects_md=$( printf '%s' "$projects" | tr ',' '\n' \
@@ -50,6 +57,13 @@ ticket_markdown() {
   # whole block is dropped when nothing failed, because a client-facing ticket should not
   # carry an empty "problems" heading.
   if [ -n "${UPDATE_FAILURES:-}" ] && [ "${UPDATE_FAILURES}" != "None." ]; then
+    # run-update separates the lines with real newlines. An older caller used literal
+    # "\n" separators instead; split those on exactly that, never with printf '%b', which
+    # also expands any "\c" or "\n" inside a reason and cuts or splits the list there.
+    failures="${UPDATE_FAILURES}"
+    if [[ "$failures" != *$'\n'* ]]; then
+      failures="${failures//\\n/$'\n'}"
+    fi
     failures_md="Could not be updated automatically and need a look by hand:"$'\n'
     while IFS= read -r line; do
       line="${line#- }"
@@ -63,20 +77,22 @@ ticket_markdown() {
         reason=$( printf '%s' "$reason" | sed "s/\`\`\`/'''/g" )
         failures_md+=$'\n```\n'"${reason}"$'\n```\n'
       fi
-    done < <( printf '%b' "${UPDATE_FAILURES}" )
+    done < <( printf '%s\n' "$failures" )
   fi
 
   body=$(cat "$(ticket_template)")
-  body=${body//\[SITE_NAME\]/$SITE_NAME}
+  # Quoted replacements: since bash 5.2 (patsub_replacement) an unquoted one turns every
+  # "&" in a site name or composer message into the matched placeholder.
+  body=${body//\[SITE_NAME\]/"$SITE_NAME"}
   # A template that keeps [PROJECTS] on a line of its own gets the bullet list. One that
   # still has it inline ("required for: [PROJECTS]") -- an older consumer override -- gets
   # the comma-separated list it was written for.
   if printf '%s\n' "$body" | grep -qx '[[:space:]]*\[PROJECTS\][[:space:]]*'; then
-    body=${body//\[PROJECTS\]/$projects_md}
+    body=${body//\[PROJECTS\]/"$projects_md"}
   else
-    body=${body//\[PROJECTS\]/$( printf '%s' "$projects" | sed 's/,[[:space:]]*$//' )}
+    body=${body//\[PROJECTS\]/"$( printf '%s' "$projects" | sed 's/,[[:space:]]*$//' )"}
   fi
-  body=${body//\[FAILURES\]/$failures_md}
+  body=${body//\[FAILURES\]/"$failures_md"}
 
   # Added here rather than in the template, so overridden templates get it too.
   if [ -n "${PR_URL:-}" ]; then

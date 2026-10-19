@@ -39,7 +39,8 @@
 #
 # Exits non-zero when the environment could not be prepared, but ALWAYS records the reason
 # in $UPDATE_STATE_DIR/disabled first, so the caller can fall back to a composer-only
-# security PR rather than failing the whole run.
+# security PR rather than failing the whole run. An unexpected failure is recorded by the
+# EXIT trap below.
 
 set -eo pipefail
 
@@ -66,6 +67,22 @@ disable_phase() {
   note "$*"
   : > "$STATE_DIR/disabled"
 }
+
+# Every expected failure below calls disable_phase before exiting. Anything else that
+# fails under set -e (terminus backup:get with no backup, the mysql import, drush cr,
+# the baseline export or commit) would exit without a reason, and the PR would then say
+# no database updates came with the update. Record those too. Only the line number goes
+# into the note: the command line can carry credentials, and for a pipeline
+# $BASH_COMMAND names its last command, not the one that failed.
+FAILED_AT=""
+trap 'FAILED_AT="$LINENO"' ERR
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -f "$STATE_DIR/disabled" ]; then
+    disable_phase "Preparing the Drupal environment failed${FAILED_AT:+ at line $FAILED_AT of setup-drupal-env} (exit $rc; see the job log${CIRCLE_BUILD_URL:+: $CIRCLE_BUILD_URL}), so no database updates were run and no configuration was exported. Run the database updates and export the configuration by hand before merging."
+  fi
+}
+trap on_exit EXIT
 
 PROJECT_ROOT="$(pwd)"
 DRUPAL_ROOT="$PROJECT_ROOT/${DOCROOT:-web}"
