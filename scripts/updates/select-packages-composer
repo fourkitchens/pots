@@ -1,0 +1,231 @@
+#!/bin/bash
+#
+# Print the packages a routine composer-update run should update, one per line.
+#
+# Called by scripts/updates/run-update via the POTS override/fallback pattern; also runnable
+# standalone for testing. Override it at
+# ./.circleci/scripts/updates/select-packages-composer to change the selection policy.
+#
+# MINOR UPGRADES, with one deliberate exception. Major version jumps are breaking by
+# definition and normally need a human to plan and test them, so they are reported rather
+# than applied. The exception is a package whose installed branch is UNSUPPORTED: it will
+# never receive another release, security fixes included, so holding it there is not the
+# safe option it appears to be. Those are listed in $UPDATE_STATE_DIR/allow-major; being
+# listed only makes a package eligible, and run-update still refuses to cross a major
+# while anything newer remains inside the installed one. Drupal core is never in that set.
+#
+# The minor-only restriction is enforced by Composer's own semver logic rather than by
+# parsing version strings here:
+#
+#   composer outdated --direct --minor-only   recomputes each package's target as the newest
+#                                             release within the SAME major version
+#   latest-status == "semver-safe-update"     and the project's own constraints allow it
+#
+# Both halves are needed. --minor-only alone would still list a package whose constraint
+# pins it (e.g. "10.2.*" shows a 10.6 candidate but reports "update-possible"), and
+# latest-status alone would let a major through on a constraint like "^1.0 || ^2.0".
+#
+# Note --minor-only includes patch releases, so "minor" here means minor + patch.
+#
+# Inputs:
+#   UPDATE_LEVEL      minor (default) or patch. There is deliberately no "major".
+#   UPDATE_ALLOW_UNSUPPORTED_MAJORS
+#                     YES (default) or NO. NO restores the old behaviour: no major is ever
+#                     applied, even for an unsupported branch.
+#   UPDATE_DRUPAL_ORG_TIMEOUT
+#                     seconds to wait on the drupal.org release-history feed. Default 15.
+#                     A timeout means the package is treated as supported.
+#   UPDATE_EXCLUDE    space-separated globs of package names to hold back, e.g.
+#                     "drupal/core-* symfony/*"
+#   UPDATE_STATE_DIR  where to record the majors we deliberately skipped. Default: /tmp/pots-update
+#
+# Output:
+#   stdout                     one composer package name per line
+#   $UPDATE_STATE_DIR/blocked  "name current -> latest" for each available MAJOR upgrade that
+#                              is NOT being applied, so run-update can report them in the
+#                              PR as needing a human
+#   $UPDATE_STATE_DIR/allow-major
+#                              "name<TAB>reason<TAB>version-at-selection" for each
+#                              unsupported package whose major run-update MAY apply.
+#                              Being listed only makes a package eligible: run-update
+#                              still refuses to cross a major while anything newer
+#                              remains inside the installed one, and then steps exactly
+#                              one major. Column 3 is informational, never a target.
+#   stderr                     human-readable logging
+#
+# Always exits 0: "nothing to update" is a normal outcome.
+
+set -eo pipefail
+
+STATE_DIR="${UPDATE_STATE_DIR:-/tmp/pots-update}"
+mkdir -p "$STATE_DIR"
+
+log() { echo "[updates:select] $*" >&2; }
+
+LEVEL="${UPDATE_LEVEL:-minor}"
+case "$LEVEL" in
+  minor|patch) ;;
+  *)
+    log "UPDATE_LEVEL '$LEVEL' is not supported (use minor or patch); falling back to minor."
+    LEVEL="minor"
+    ;;
+esac
+
+# Record the major upgrades that exist but will NOT be applied. Reporting these is the point:
+# a blocked major is information the team needs, not something to hide.
+MAJOR_JSON="$(composer outdated --direct --major-only --format=json 2>/dev/null || true)"
+: > "$STATE_DIR/blocked"
+if [ -n "$MAJOR_JSON" ] && echo "$MAJOR_JSON" | jq empty >/dev/null 2>&1; then
+  echo "$MAJOR_JSON" \
+    | jq -r '.installed[]? | select(.latest != null) | "\(.name) \(.version) -> \(.latest)"' \
+    >> "$STATE_DIR/blocked" || true
+fi
+
+##
+# Unsupported projects may cross a major boundary.
+#
+# "Minor updates only" is the right default, but it has a hole: a project whose installed
+# branch is unsupported receives no further releases at all, security ones included. Held
+# on that branch forever, it quietly becomes the least safe thing on the site. So when a
+# package is unsupported AND a major is available, it is offered for upgrade and recorded
+# in allow-major, which run-update reads to raise the constraint with `composer require`.
+#
+# Two signals, either of which counts:
+#
+#   drupal.org   the release-history feed lists <supported_branches>; an installed version
+#                outside that list is on a dead branch. This is the authoritative answer
+#                for contrib and the one that matters in practice.
+#   composer     the package is marked abandoned in its own metadata.
+#
+# Only packages that actually have a major waiting are checked, so this costs one HTTP
+# request per blocked major, not one per installed package. Any failure to reach
+# drupal.org leaves the package out: the conservative answer is "supported".
+#
+# Set UPDATE_ALLOW_UNSUPPORTED_MAJORS=NO to switch the whole behaviour off.
+##
+: > "$STATE_DIR/allow-major"
+
+drupal_branch_unsupported() {
+  # $1 = composer package name, $2 = installed version
+  local pkg="$1" version="$2" project feed supported branch
+  case "$pkg" in
+    drupal/*) project="${pkg#drupal/}" ;;
+    *) return 1 ;;
+  esac
+  feed="$(curl -sS --max-time "${UPDATE_DRUPAL_ORG_TIMEOUT:-15}" \
+    "https://updates.drupal.org/release-history/${project}/current" 2>/dev/null || true)"
+  [ -z "$feed" ] && return 1
+  # An explicitly unsupported or unpublished project counts on its own.
+  if printf '%s' "$feed" | grep -qE '<project_status>(unsupported|unpublished)</project_status>'; then
+    return 0
+  fi
+  supported="$(printf '%s' "$feed" \
+    | tr -d '\n' \
+    | sed -n 's|.*<supported_branches>\([^<]*\)</supported_branches>.*|\1|p')"
+  # No supported_branches element means the project does not declare them; do not guess.
+  [ -z "$supported" ] && return 1
+  # Drupal strips the "8.x-" prefix from semver-style contrib versions in composer.
+  version="${version#v}"
+  IFS=',' read -r -a BRANCHES <<< "$supported"
+  for branch in "${BRANCHES[@]}"; do
+    branch="${branch#8.x-}"
+    [ -z "$branch" ] && continue
+    case "$version" in
+      "$branch"*) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+if [ "${UPDATE_ALLOW_UNSUPPORTED_MAJORS:-YES}" != "NO" ] && [ -s "$STATE_DIR/blocked" ]; then
+  ABANDONED="$(composer outdated --direct --major-only --format=json 2>/dev/null \
+    | jq -r '.installed[]? | select((.abandoned // false) != false) | .name' | sort -u || true)"
+  while read -r NAME CURRENT _ARROW LATEST; do
+    [ -z "$NAME" ] && continue
+    # Core majors stay a planned, human project; routine maintenance never takes one.
+    case "$NAME" in drupal/core|drupal/core-*) continue ;; esac
+    REASON=""
+    if printf '%s\n' "$ABANDONED" | grep -qxF "$NAME"; then
+      REASON="The package is marked abandoned by its maintainers"
+    elif drupal_branch_unsupported "$NAME" "$CURRENT"; then
+      REASON="Its installed branch ($CURRENT) is no longer supported on drupal.org"
+    fi
+    if [ -n "$REASON" ]; then
+      log "$NAME is unsupported at $CURRENT; run-update will step one major at a time."
+      # Column 3 is the version installed when the selection was made, and it is
+      # informational only. Deliberately NOT $LATEST: that comes from --major-only,
+      # which reports the NEWEST major, and handing run-update that number would
+      # re-create the bug this rule exists to prevent. run-update works out its own
+      # target with next_major_after, after checking the current major is exhausted.
+      printf '%s\t%s\t%s\n' "$NAME" "$REASON" "$CURRENT" >> "$STATE_DIR/allow-major"
+    fi
+  done < "$STATE_DIR/blocked"
+fi
+
+OUTDATED_JSON="$(composer outdated --direct --"${LEVEL}"-only --format=json 2>/dev/null || true)"
+
+if [ -z "$OUTDATED_JSON" ] || ! echo "$OUTDATED_JSON" | jq empty >/dev/null 2>&1; then
+  log "composer outdated produced no usable JSON; nothing to update."
+  exit 0
+fi
+
+# semver-safe-update == composer update will actually move it without touching composer.json.
+# Skip abandoned packages (they need replacing, not updating) and dev-* installs (no
+# meaningful version to compare).
+CANDIDATES="$(echo "$OUTDATED_JSON" | jq -r '
+  .installed[]?
+  | select(.["latest-status"] == "semver-safe-update")
+  | select((.abandoned // false) == false)
+  | select((.version // "") | startswith("dev-") | not)
+  | .name' | sort -u)"
+
+# Optional per-project hold-back list.
+PACKAGES=""
+for PKG in $CANDIDATES; do
+  SKIP="no"
+  for PATTERN in ${UPDATE_EXCLUDE:-}; do
+    # shellcheck disable=SC2053
+    if [[ "$PKG" == $PATTERN ]]; then
+      SKIP="yes"
+      break
+    fi
+  done
+  if [ "$SKIP" = "yes" ]; then
+    log "Skipping $PKG (matches UPDATE_EXCLUDE)."
+  else
+    PACKAGES+="${PKG}"$'\n'
+  fi
+done
+PACKAGES="$(printf '%s' "$PACKAGES" | sed '/^$/d')"
+
+# A package on an unsupported branch usually has NO minor-level update left -- that is
+# what being unsupported means -- so it would never reach run-update through the list
+# above. Add it here; run-update raises its constraint rather than running a plain update.
+if [ -s "$STATE_DIR/allow-major" ]; then
+  while IFS=$'\t' read -r NAME _REASON; do
+    [ -z "$NAME" ] && continue
+    if ! printf '%s\n' "$PACKAGES" | grep -qxF "$NAME"; then
+      PACKAGES="$(printf '%s\n%s\n' "$PACKAGES" "$NAME" | sed '/^$/d')"
+    fi
+  done < "$STATE_DIR/allow-major"
+  # Majors being applied are no longer "blocked"; leave only the ones a human must plan.
+  if [ -s "$STATE_DIR/blocked" ]; then
+    # Match the whole package name (field 1), never a substring: allowing drupal/token
+    # must not also hide the blocked major for drupal/token_filter.
+    awk 'NR == FNR { allowed[$1]; next } !($1 in allowed)' \
+      <( cut -f1 "$STATE_DIR/allow-major" ) "$STATE_DIR/blocked" > "$STATE_DIR/blocked.tmp" 2>/dev/null || true
+    mv "$STATE_DIR/blocked.tmp" "$STATE_DIR/blocked" 2>/dev/null || true
+  fi
+fi
+
+if [ -z "$PACKAGES" ]; then
+  log "No ${LEVEL}-level updates available within the project's version constraints."
+else
+  log "Available ${LEVEL}-level updates: $(echo "$PACKAGES" | tr '\n' ' ')"
+fi
+
+if [ -s "$STATE_DIR/blocked" ]; then
+  log "Major upgrades available but NOT applied automatically: $(wc -l < "$STATE_DIR/blocked" | tr -d ' ') package(s)."
+fi
+
+printf '%s\n' "$PACKAGES"

@@ -1,0 +1,288 @@
+#!/bin/bash
+#
+# Create a Productive.io task for an AutoSec update run and print its reference and URL.
+#
+# The sibling of scripts/updates/create-clickup-ticket, deliberately sharing its
+# contract so both can run side by side while Four Kitchens migrates from ClickUp to
+# Productive. Called by scripts/updates/run-update via the POTS
+# override/fallback pattern; also runnable standalone for testing.
+#
+# Inputs:
+#   $1                    Comma-separated list of updated projects (for the ticket body).
+#   PRODUCTIVE_TOKEN (env) Productive API token. A CircleCI project env var, kept OUT of
+#                         UPDATE_DATA (pipeline parameters are readable via the
+#                         CircleCI API/UI).
+#   UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
+#                         organization_id, project_id, task_list_id (optional),
+#                         board_id (optional), assignee_id (optional),
+#                         status (optional), workflow_status_id (optional),
+#                         task_url_template (optional).
+#   SITE_NAME       (env) Site name, used in the ticket title/body.
+#   PR_URL          (env) Optional. The pull request opened for these updates,
+#                         linked at the end of the ticket description. PR_NUMBER (env)
+#                         labels the link.
+#
+# Output:
+#   One line on stdout, "<reference><TAB><url>" -- the reference is the task number as
+#   Productive shows it ("#123") -- or nothing when ticketing is unconfigured or the API
+#   call fails. All human-readable logging goes to stderr so callers can capture the line
+#   with $( ... ). Always exits 0, so it can never abort the caller's PR.
+#
+# SECURITY: never echo PRODUCTIVE_TOKEN, and do not enable `set -x` in this script.
+
+set -eo pipefail
+
+PROJECTS_UPDATED="${1:-}"
+
+PR_API="https://api.productive.io/api/v2"
+
+log() { echo "$@" >&2; }
+
+# Unpack the Productive settings from the UPDATE_DATA pipeline parameter (JSON).
+# Only unpack when it holds valid, non-empty JSON; otherwise the PR_* vars stay empty and
+# the gate below skips ticket creation.
+if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] && echo "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+  PR_ORG_ID=$(jq -r '.organization_id // empty'         <<<"$UPDATE_DATA")
+  PR_PROJECT_ID=$(jq -r '.project_id // empty'          <<<"$UPDATE_DATA")
+  PR_TASK_LIST_ID=$(jq -r '.task_list_id // empty'      <<<"$UPDATE_DATA")
+  PR_BOARD_ID=$(jq -r '.board_id // empty'              <<<"$UPDATE_DATA")
+  PR_ASSIGNEE_ID=$(jq -r '.assignee_id // empty'        <<<"$UPDATE_DATA")
+  PR_STATUS_ID=$(jq -r '.workflow_status_id // empty'   <<<"$UPDATE_DATA")
+  PR_STATUS_NAME=$(jq -r '.status // empty'             <<<"$UPDATE_DATA")
+  PR_URL_TEMPLATE=$(jq -r '.task_url_template // empty' <<<"$UPDATE_DATA")
+fi
+
+# Gate: need the token (env) + organization + project. Skip cleanly otherwise.
+if ! { [ -n "${PRODUCTIVE_TOKEN:-}" ] && [ -n "${PR_ORG_ID:-}" ] && [ -n "${PR_PROJECT_ID:-}" ]; }; then
+  log "Productive not configured (need PRODUCTIVE_TOKEN + organization_id + project_id); skipping ticket."
+  exit 0
+fi
+
+# Title, body and default status are shared with create-clickup-ticket.
+# Consumer override, else the vendored copy, else the copy beside this script (running
+# from a POTS checkout). Never only this script's directory: an overridden ticket script
+# runs from .circleci/scripts/updates/, where ticket-lib.sh does not exist.
+for TICKET_LIB in ./.circleci/scripts/updates/ticket-lib.sh \
+                  ./vendor/fourkitchens/pots/scripts/updates/ticket-lib.sh \
+                  "$(dirname "$0")/ticket-lib.sh"; do
+  [ -f "$TICKET_LIB" ] && break
+done
+source "$TICKET_LIB"
+
+# Productive renders the task description as HTML.
+PR_BODY_HTML=$( ticket_markdown "$PROJECTS_UPDATED" | ticket_markdown_to_html )
+PR_TICKET_TITLE="$( ticket_title )"
+
+# GET a Productive API path, printing the JSON body, or nothing on any failure -- which
+# is logged with its HTTP status, since a silent failure here is indistinguishable from
+# "not found". -g stops curl reading the [] in filter[...] as a glob.
+pr_get() {
+  local out code
+  out=$(mktemp)
+  code=$(curl -s -g -o "$out" -w "%{http_code}" --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+      -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+      -H "X-Organization-Id: ${PR_ORG_ID}" \
+      -H "Content-Type: application/vnd.api+json" \
+      "${PR_API}$1") || code="000"
+  if [ "$code" = "200" ]; then
+    cat "$out"
+  else
+    log "Productive GET ${1%%\?*} returned HTTP ${code}."
+  fi
+  rm -f "$out"
+}
+
+# PATCH a task with a JSON:API body, printing the HTTP status.
+pr_patch_task() {
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" \
+    --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+    -X PATCH "${PR_API}/tasks/$1" \
+    -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+    -H "X-Organization-Id: ${PR_ORG_ID}" \
+    -H "Content-Type: application/vnd.api+json" \
+    -d "$2") || code="000"
+  printf '%s' "$code"
+}
+
+# Is the task's creator subscribed to it? Uses TASK_ID and CREATOR_ID. A failed request
+# answers "no", so a broken lookup can never trigger a subscriber change.
+creator_subscribed() {
+  local count
+  count=$( pr_get "/tasks?filter[id]=${TASK_ID}&filter[subscriber_id]=${CREATOR_ID}" \
+    | jq -r '.meta.total_count // 0' 2>/dev/null || true )
+  [ "${count:-0}" -gt 0 ] 2>/dev/null
+}
+
+# What a failed GET is treated as, so jq always has a document to read.
+NO_DATA='{"data":[]}'
+
+# The workflow statuses that apply to the project, as JSON:API data. Productive filters
+# statuses by project directly; when that comes back empty, go through the project's
+# workflow instead.
+project_statuses() {
+  local statuses workflow_id
+  statuses=$( pr_get "/workflow_statuses?filter[project_id]=${PR_PROJECT_ID}&page[size]=200" )
+  if [ "$( jq -r '.data | length' <<<"${statuses:-$NO_DATA}" 2>/dev/null || echo 0 )" = "0" ]; then
+    workflow_id=$( pr_get "/projects/${PR_PROJECT_ID}" \
+      | jq -r '.data.attributes.workflow_id // .data.relationships.workflow.data.id // empty' 2>/dev/null || true )
+    if [ -n "$workflow_id" ]; then
+      statuses=$( pr_get "/workflow_statuses?filter[workflow_id]=${workflow_id}&page[size]=200" )
+    fi
+  fi
+  printf '%s' "$statuses"
+}
+
+# Open the task in a named status ("Ready for Dev" unless update-data says otherwise)
+# instead of the first one in the workflow, which is usually Backlog. workflow_status_id,
+# when set, wins and skips the lookup. Names are compared ignoring case and spacing. A
+# name the project does not have is logged, with the names it does have, and left out, so
+# the task is still created, in Productive's default status.
+if [ -z "${PR_STATUS_ID:-}" ]; then
+  PR_STATUS_NAME="${PR_STATUS_NAME:-$TICKET_DEFAULT_STATUS}"
+  PR_STATUSES=$( project_statuses )
+  PR_STATUS_ID=$( jq -r --arg n "$PR_STATUS_NAME" '
+      def norm: ascii_downcase | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ");
+      [.data[]? | select((.attributes.name // "" | norm) == ($n | norm)) | .id][0] // empty
+    ' <<<"${PR_STATUSES:-$NO_DATA}" 2>/dev/null || true )
+  if [ -n "$PR_STATUS_ID" ]; then
+    log "Opening the task in status '${PR_STATUS_NAME}' (${PR_STATUS_ID})."
+  else
+    log "Warning: no workflow status named '${PR_STATUS_NAME}' found for project ${PR_PROJECT_ID}; using Productive's default status."
+    log "Statuses available to the project: $( jq -r '[.data[]?.attributes.name] | if length == 0 then "none returned" else join(", ") end' <<<"${PR_STATUSES:-$NO_DATA}" 2>/dev/null || echo "none returned" )"
+  fi
+fi
+
+# Due a week after the ticket is opened. GNU date (CI) takes -d, BSD date (macOS, when
+# run by hand) takes -v.
+DUE_DATE="$( date -d '+7 days' +%F 2>/dev/null || date -v+7d +%F )"
+
+# Build the JSON:API request body with jq so quotes/newlines in the site name or project
+# list can never produce invalid JSON. Productive expects Content-Type
+# application/vnd.api+json with the type/attributes/relationships envelope. Everything
+# except project is optional, and each optional relationship is merged in only when set:
+# sending a null relationship is rejected. The status also goes as the workflow_status_id
+# attribute, which is how Productive's current API reference documents it.
+PR_JSON_DATA=$(jq -n \
+  --arg title "$PR_TICKET_TITLE" \
+  --arg desc "$PR_BODY_HTML" \
+  --arg due "$DUE_DATE" \
+  --arg project "$PR_PROJECT_ID" \
+  --arg task_list "${PR_TASK_LIST_ID:-}" \
+  --arg board "${PR_BOARD_ID:-}" \
+  --arg assignee "${PR_ASSIGNEE_ID:-}" \
+  --arg status "${PR_STATUS_ID:-}" \
+  '{
+    data: {
+      type: "tasks",
+      attributes: ({
+        title: $title,
+        description: $desc,
+        due_date: $due,
+        tag_list: ["autosec update"]
+      } + (if $status != "" then { workflow_status_id: ($status | tonumber) } else {} end)),
+      relationships: (
+        { project: { data: { type: "projects", id: $project } } }
+        + (if $task_list != "" then { task_list: { data: { type: "task_lists", id: $task_list } } } else {} end)
+        + (if $board     != "" then { board:     { data: { type: "boards",     id: $board } } } else {} end)
+        + (if $assignee  != "" then { assignee:  { data: { type: "people",     id: $assignee } } } else {} end)
+        + (if $status    != "" then { workflow_status: { data: { type: "workflow_statuses", id: $status } } } else {} end)
+      )
+    }
+  }')
+
+log "Creating Productive task in project ${PR_PROJECT_ID}..."
+RESPONSE_FILE=$(mktemp)
+# No -i, so the body is pure JSON we can parse with jq; capture the HTTP status separately
+# so a non-2xx never aborts the run.
+PR_HTTP=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
+  --max-time "${PRODUCTIVE_TIMEOUT:-30}" \
+  -X POST "${PR_API}/tasks" \
+  -H "X-Auth-Token: ${PRODUCTIVE_TOKEN}" \
+  -H "X-Organization-Id: ${PR_ORG_ID}" \
+  -H "Content-Type: application/vnd.api+json" \
+  -d "$PR_JSON_DATA") || PR_HTTP="000"
+
+if [ "$PR_HTTP" = "200" ] || [ "$PR_HTTP" = "201" ]; then
+  TASK_ID=$(jq -r '.data.id // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  TASK_NUMBER=$(jq -r '.data.attributes.task_number // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  if [ -z "$TASK_ID" ]; then
+    log "Warning: Productive returned HTTP ${PR_HTTP} but no task id; continuing without a ticket."
+  else
+    # Productive does not return a web URL for the task, so build one. The template is
+    # configurable because the permalink shape is not part of the documented API: set
+    # task_url_template in UPDATE_DATA if this default ever stops matching.
+    # The default is assigned separately: inside ${PR_URL_TEMPLATE:-...} the first "}"
+    # of "{org}" would close the expansion and mangle the link.
+    DEFAULT_URL_TEMPLATE='https://app.productive.io/{org}/task/{id}'
+    TEMPLATE_URL="${PR_URL_TEMPLATE:-$DEFAULT_URL_TEMPLATE}"
+    TICKET_URL=${TEMPLATE_URL//\{org\}/$PR_ORG_ID}
+    TICKET_URL=${TICKET_URL//\{id\}/$TASK_ID}
+    # "#123" is how Productive itself labels the task. Without a task number, fall back to
+    # the internal id, which is not one people will recognise, so say what it is.
+    if [ -n "$TASK_NUMBER" ]; then
+      TICKET_REF="#${TASK_NUMBER}"
+    else
+      TICKET_REF="task ${TASK_ID}"
+    fi
+    log "Productive task ${TICKET_REF} created: ${TICKET_URL}"
+
+    # Read the task back. Productive leaves relationships empty ("included": false) unless
+    # they are asked for with ?include=, and the create response does not ask, so this is
+    # the only way to learn the task's real status and who created it.
+    TASK_JSON=$( pr_get "/tasks/${TASK_ID}?include=creator,workflow_status" )
+
+    # Make sure the status took. If Productive put the task somewhere else, set it with an
+    # update. Non-fatal either way: the task exists, and the link is what the PR needs.
+    if [ -n "${PR_STATUS_ID:-}" ]; then
+      GOT_STATUS=$(jq -r '.data.relationships.workflow_status.data.id // empty' <<<"${TASK_JSON:-$NO_DATA}" 2>/dev/null || true)
+      if [ "$GOT_STATUS" != "$PR_STATUS_ID" ]; then
+        log "Task opened in status ${GOT_STATUS:-unknown}, not ${PR_STATUS_ID}; updating it."
+        PATCH_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --arg status "$PR_STATUS_ID" '{
+            data: {
+              type: "tasks",
+              attributes: { workflow_status_id: ($status | tonumber) },
+              relationships: { workflow_status: { data: { type: "workflow_statuses", id: $status } } }
+            }
+          }')" )
+        if [ "$PATCH_HTTP" = "200" ]; then
+          log "Task status set to ${PR_STATUS_ID}."
+        else
+          log "Warning: could not set the task status (HTTP ${PATCH_HTTP}); it stays in ${GOT_STATUS:-its default status}."
+        fi
+      fi
+    fi
+
+    # Productive subscribes whoever creates a task, which here is the API token's owner. On
+    # an automated ticket that is nobody in particular, so take them off -- unless they are
+    # also the assignee, in which case the ticket really is theirs.
+    #
+    # Productive never returns a task's subscriber list, so there is no list to take one
+    # person out of. What it does offer: filter[subscriber_id] answers "is this person
+    # subscribed?", and the subscriber_ids attribute can be written. So check the creator,
+    # and if they are subscribed, write the list the ticket should have: the assignee, or
+    # nobody. Then check again, because a 200 alone does not prove the change took.
+    # Non-fatal, like the status fix.
+    CREATOR_ID=$(jq -r '.data.relationships.creator.data.id // empty' <<<"${TASK_JSON:-$NO_DATA}" 2>/dev/null || true)
+    if [ -z "$CREATOR_ID" ]; then
+      log "Warning: could not tell who created the task; leaving its subscribers as they are."
+    elif [ "$CREATOR_ID" != "${PR_ASSIGNEE_ID:-}" ] && creator_subscribed; then
+      SUB_HTTP=$( pr_patch_task "$TASK_ID" "$(jq -n --arg a "${PR_ASSIGNEE_ID:-}" '{
+          data: { type: "tasks", attributes: { subscriber_ids: (if $a != "" then [$a | tonumber] else [] end) } }
+        }')" )
+      if [ "$SUB_HTTP" != "200" ]; then
+        log "Warning: could not update the task's subscribers (HTTP ${SUB_HTTP}); the creator stays subscribed."
+      elif creator_subscribed; then
+        log "Warning: Productive accepted the subscriber change, but the creator (person ${CREATOR_ID}) is still subscribed."
+      else
+        log "Removed the ticket creator (person ${CREATOR_ID}) from the task's subscribers."
+      fi
+    fi
+    printf '%s\t%s\n' "$TICKET_REF" "$TICKET_URL"   # the only stdout: the caller captures this
+  fi
+else
+  log "Warning: Productive task creation failed (HTTP ${PR_HTTP}); continuing without a ticket."
+  log "$(jq -r '.errors[]?.detail // .errors[]?.title // empty' "$RESPONSE_FILE" 2>/dev/null || cat "$RESPONSE_FILE" 2>/dev/null || true)"
+fi
+rm -f "$RESPONSE_FILE"
+exit 0

@@ -1,0 +1,134 @@
+#!/bin/bash
+#
+# Create a ClickUp task for an AutoSec update run and print its reference and URL.
+#
+# Called by scripts/updates/run-update via the POTS override/fallback
+# pattern; also runnable standalone for testing.
+#
+# Inputs:
+#   $1               Comma-separated list of updated projects (for the ticket body).
+#   CU_TOKEN   (env) ClickUp API token. A CircleCI project env var, kept OUT of
+#                    UPDATE_DATA
+#                    (pipeline parameters are readable via the CircleCI API/UI).
+#   UPDATE_DATA (env) JSON blob of the non-secret ticketing settings. Keys read here:
+#                    list_id, client_id, assignee_id (optional), status (optional).
+#   SITE_NAME  (env) Site name, used in the ticket title/body.
+#   PR_URL     (env) Optional. The pull request opened for these updates,
+#                    linked at the end of the ticket description. PR_NUMBER (env)
+#                    labels the link.
+#
+# Output:
+#   One line on stdout, "<reference><TAB><url>" -- the reference is the task's custom id,
+#   or "CU-<id>" -- or nothing when ticketing is unconfigured or the API call fails. All human-readable
+#   logging goes to stderr so callers can capture the line with $( ... ). Always exits 0,
+#   so it can never abort the caller's PR.
+#
+# SECURITY: never echo CU_TOKEN, and do not enable `set -x` in this script.
+
+set -eo pipefail
+
+PROJECTS_UPDATED="${1:-}"
+
+CU_API="https://api.clickup.com/api/v2"
+# Workspace-global custom-field id (constant across 4K projects):
+CU_FIELD_CLIENT="b8bbcb75-a7c8-4eb7-9202-e56d227eefbf"    # "Client" field
+
+log() { echo "$@" >&2; }
+
+# Unpack the ClickUp settings from the UPDATE_DATA pipeline parameter (JSON).
+# Only unpack when it holds valid, non-empty JSON; otherwise the CU_* vars stay empty and
+# the gate below skips ticket creation.
+if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] && echo "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+  CU_LIST_ID=$(jq -r '.list_id // empty'        <<<"$UPDATE_DATA")
+  CU_CLIENT_ID=$(jq -r '.client_id // empty'    <<<"$UPDATE_DATA")
+  CU_ASSIGNEE_ID=$(jq -r '.assignee_id // empty' <<<"$UPDATE_DATA")
+  CU_STATUS=$(jq -r '.status // empty'          <<<"$UPDATE_DATA")
+fi
+
+# Gate: need the token (env) + list + client. Skip cleanly otherwise.
+if ! { [ -n "${CU_TOKEN:-}" ] && [ -n "${CU_LIST_ID:-}" ] && [ -n "${CU_CLIENT_ID:-}" ]; }; then
+  log "ClickUp not configured (need CU_TOKEN + list_id + client_id); skipping ticket."
+  exit 0
+fi
+
+# Title, body and default status are shared with create-productive-ticket.
+# Consumer override, else the vendored copy, else the copy beside this script (running
+# from a POTS checkout). Never only this script's directory: an overridden ticket script
+# runs from .circleci/scripts/updates/, where ticket-lib.sh does not exist.
+for TICKET_LIB in ./.circleci/scripts/updates/ticket-lib.sh \
+                  ./vendor/fourkitchens/pots/scripts/updates/ticket-lib.sh \
+                  "$(dirname "$0")/ticket-lib.sh"; do
+  [ -f "$TICKET_LIB" ] && break
+done
+source "$TICKET_LIB"
+
+# ClickUp renders Markdown natively, so the body goes as-is.
+CU_BODY_MESSAGE=$( ticket_markdown "$PROJECTS_UPDATED" )
+CU_TICKET_TITLE="$( ticket_title )"
+
+# Open the task in a named status ("Ready for Dev" unless update-data says otherwise)
+# instead of the list's default, which is usually the backlog. ClickUp rejects the whole
+# create for a status the list does not define, so check the name against the list first
+# and send the list's own spelling of it. A name the list does not have is logged and
+# left out, so the task is still created, in the list's default status.
+CU_STATUS_WANTED="${CU_STATUS:-$TICKET_DEFAULT_STATUS}"
+CU_STATUS=$( curl -s --max-time 30 -H "Authorization: ${CU_TOKEN}" "${CU_API}/list/${CU_LIST_ID}" \
+  | jq -r --arg n "$CU_STATUS_WANTED" \
+      '[.statuses[]?.status | select(ascii_downcase == ($n | ascii_downcase))][0] // empty' \
+      2>/dev/null || true )
+if [ -n "$CU_STATUS" ]; then
+  log "Opening the task in status '${CU_STATUS}'."
+else
+  log "Warning: list ${CU_LIST_ID} has no status named '${CU_STATUS_WANTED}'; using the list's default status."
+fi
+
+START_DATE_MS="$(( $(date +%s) * 1000 ))"   # ms epoch; portable across macOS/Linux
+
+# Build the request body with jq so quotes/newlines in the site name or project list can
+# never produce invalid JSON. assignees/status are optional; omitting a status lets the
+# list use its own default. markdown_content is what ClickUp renders; description carries
+# the same text as a plain fallback.
+CU_JSON_DATA=$(jq -n \
+  --arg name "$CU_TICKET_TITLE" \
+  --arg desc "$CU_BODY_MESSAGE" \
+  --arg client_id "$CU_CLIENT_ID" \
+  --arg client_field "$CU_FIELD_CLIENT" \
+  --arg assignee "${CU_ASSIGNEE_ID:-}" \
+  --arg status "${CU_STATUS:-}" \
+  --argjson start_date "$START_DATE_MS" \
+  '{
+    name: $name,
+    tags: ["autosec update"],
+    priority: 2,
+    start_date: $start_date,
+    start_date_time: false,
+    notify_all: false,
+    check_required_custom_fields: true,
+    custom_fields: [ { id: $client_field, value: $client_id } ],
+    description: $desc,
+    markdown_content: $desc
+  }
+  + (if $assignee != "" then { assignees: [ ($assignee | tonumber) ] } else {} end)
+  + (if $status   != "" then { status: $status } else {} end)')
+
+log "Creating ClickUp ticket in list ${CU_LIST_ID}..."
+RESPONSE_FILE=$(mktemp)
+# No -i, so the body is pure JSON we can parse with jq; capture the HTTP status
+# separately so a non-2xx never aborts the run.
+CU_HTTP=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
+  -X POST "${CU_API}/list/${CU_LIST_ID}/task" \
+  -H "Authorization: ${CU_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "$CU_JSON_DATA") || CU_HTTP="000"
+
+if [ "$CU_HTTP" = "200" ] || [ "$CU_HTTP" = "201" ]; then
+  TICKET_URL=$(jq -r '.url // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  TICKET_REF=$(jq -r '.custom_id // (if .id then "CU-" + .id else empty end)' "$RESPONSE_FILE" 2>/dev/null || true)
+  log "ClickUp ticket ${TICKET_REF} created: ${TICKET_URL}"
+  printf '%s\t%s\n' "$TICKET_REF" "$TICKET_URL"   # the only stdout: the caller captures this
+else
+  log "Warning: ClickUp task creation failed (HTTP ${CU_HTTP}); continuing without a ticket."
+  log "$(cat "$RESPONSE_FILE" 2>/dev/null || true)"
+fi
+rm -f "$RESPONSE_FILE"
+exit 0
