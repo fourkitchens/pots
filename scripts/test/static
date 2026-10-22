@@ -54,7 +54,7 @@ do
   FAIL=YES
   echo "Merge conflict marker detected: $result"
   echo "<testsuite package=\"git\" time=\"0\" tests=\"1\" errors=\"1\" name=\"$result\"><testcase time=\"0\" name=\"$result\"><error message=\"Merge conflict marker detected\"><![CDATA[line "$( echo "$result" | grep -o [0-9]*$)", Error Merge conflict marker detected]]  </error></testcase></testsuite>" >> $RESULTS_DIR/git-merge-marker.xml
-done < <( git grep -InE '^(<{7}|>{7})( |$)' -- . ':(exclude)vendor' ':(exclude)*/node_modules' | cut -d: -f1,2 )
+done < <( git grep -InE '^(<{7}|>{7})([[:space:]]|$)' -- . ':(exclude)vendor' ':(exclude,glob)**/node_modules/**' | cut -d: -f1,2 )
 echo "</testsuites>" >> $RESULTS_DIR/git-merge-marker.xml
 
 
