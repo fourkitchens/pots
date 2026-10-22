@@ -959,7 +959,7 @@ body as `ClickUp CU-<id>` (or the task's custom id). Ticketing is handled by
 `scripts/updates/create-clickup-ticket` and is entirely optional — if it is not
 configured, AutoSec still updates packages and opens the PR, just without a ticket.
 
-ClickUp is the default, so there is nothing to select. The API token is a CircleCI secret;
+ClickUp has to be selected explicitly, since the default is Productive. The API token is a CircleCI secret;
 the rest of the settings travel in the `update-data` pipeline parameter (a JSON blob)
 so they can be set per-trigger without touching config:
 
