@@ -61,11 +61,12 @@ note() {
 }
 
 # Record why the database/config-export phase cannot run. apply-db-updates checks for this
-# flag and becomes a no-op, so the composer updates, push and PR still happen.
+# flag and becomes a no-op, so the composer updates, push and PR still happen. The reason
+# goes into the flag too, so every package skipped because of it says why.
 disable_phase() {
   log "DATABASE PHASE DISABLED: $*"
   note "$*"
-  : > "$STATE_DIR/disabled"
+  printf '%s\n' "$*" > "$STATE_DIR/disabled"
 }
 
 # Every expected failure below calls disable_phase before exiting. Anything else that
@@ -313,7 +314,38 @@ esac
 log "Configuration will be exported to $CONFIG_SYNC_DIR"
 
 ##
-# 6. Normalise: drain updates already pending on the canonical environment, then make the
+# 6. Prepare the files directories.
+#
+# The files directories are never in git, so a fresh checkout has none, and the restored
+# database comes without them. Update hooks do write files -- anchor_link's
+# allow_anchor_name_attribute post-update copies one into public:// -- and one that cannot
+# fails `drush updatedb`, which disables this phase for every package after it. Create
+# them, writable, before any update runs. The temporary directory needs nothing:
+# file_temp_path is the system temp dir in the CI settings file.
+##
+prepare_files_dir() {   # $1 label, $2 path as Drupal reports it, $3 mode
+  local label="$1" raw="$2" mode="$3" dir
+  case "$raw" in
+    /*) dir="$raw" ;;
+    *)  dir="$DRUPAL_ROOT/$raw" ;;
+  esac
+  if ! mkdir -p "$dir" || ! chmod "$mode" "$dir" || [ ! -w "$dir" ]; then
+    disable_phase "The $label files directory '$raw' could not be created as a writable directory, so database updates that write files would fail."
+    exit 1
+  fi
+  log "The $label files directory is ready: $dir ($mode)."
+}
+
+PUBLIC_FILES_DIR="$( drush_value status --field=files || true )"
+prepare_files_dir public "${PUBLIC_FILES_DIR:-sites/default/files}" 775
+
+PRIVATE_FILES_DIR="$( drush_value status --field=private || true )"
+if [ -n "$PRIVATE_FILES_DIR" ]; then
+  prepare_files_dir private "$PRIVATE_FILES_DIR" 770
+fi
+
+##
+# 7. Normalise: drain updates already pending on the canonical environment, then make the
 #    active configuration match what is in git, so every later diff is attributable to a
 #    package we just updated.
 ##
@@ -335,7 +367,7 @@ fi
 "${DRUSH_CMD[@]}" cr
 
 ##
-# 7. Baseline export. Anything dirty now is pre-existing drift, not something a security
+# 8. Baseline export. Anything dirty now is pre-existing drift, not something a security
 #    update caused, so keep it out of the per-package commits.
 ##
 log "Taking a baseline configuration export."

@@ -69,57 +69,109 @@ CU_TICKET_TITLE="$( ticket_title )"
 # Open the task in a named status ("Ready for Dev" unless update-data says otherwise)
 # instead of the list's default, which is usually the backlog. ClickUp rejects the whole
 # create for a status the list does not define, so check the name against the list first
-# and send the list's own spelling of it. A name the list does not have is logged and
-# left out, so the task is still created, in the list's default status.
+# and send the list's own spelling of it. A name the list does not have falls back to
+# "Ready for Dev", and only when the list has neither is the status left out, so the task
+# is still created, in the list's default status.
+CU_LIST_STATUSES=$( curl -s --max-time 30 -H "Authorization: ${CU_TOKEN}" "${CU_API}/list/${CU_LIST_ID}" \
+  | jq -c '[.statuses[]?.status]' 2>/dev/null || true )
+list_status() {   # $1 a status name; prints the list's spelling of it, or nothing
+  jq -r --arg n "$1" '[.[] | select(ascii_downcase == ($n | ascii_downcase))][0] // empty' \
+    <<<"${CU_LIST_STATUSES:-[]}" 2>/dev/null || true
+}
 CU_STATUS_WANTED="${CU_STATUS:-$TICKET_DEFAULT_STATUS}"
-CU_STATUS=$( curl -s --max-time 30 -H "Authorization: ${CU_TOKEN}" "${CU_API}/list/${CU_LIST_ID}" \
-  | jq -r --arg n "$CU_STATUS_WANTED" \
-      '[.statuses[]?.status | select(ascii_downcase == ($n | ascii_downcase))][0] // empty' \
-      2>/dev/null || true )
+CU_STATUS="$( list_status "$CU_STATUS_WANTED" )"
+if [ -z "$CU_STATUS" ] && [ "$CU_STATUS_WANTED" != "$TICKET_DEFAULT_STATUS" ]; then
+  log "Warning: list ${CU_LIST_ID} has no status named '${CU_STATUS_WANTED}'; falling back to '${TICKET_DEFAULT_STATUS}'."
+  CU_STATUS_WANTED="$TICKET_DEFAULT_STATUS"
+  CU_STATUS="$( list_status "$CU_STATUS_WANTED" )"
+fi
 if [ -n "$CU_STATUS" ]; then
   log "Opening the task in status '${CU_STATUS}'."
 else
   log "Warning: list ${CU_LIST_ID} has no status named '${CU_STATUS_WANTED}'; using the list's default status."
 fi
 
+# The "Client" drop-down takes an option id. Check client_id against the options the list
+# actually offers, accepting the option's name as well and sending its id: an unknown value
+# makes ClickUp reject the whole create. When the field definitions cannot be read, send
+# client_id as given and let ClickUp decide.
+CU_CLIENT_OPTIONS=$( curl -s --max-time 30 -H "Authorization: ${CU_TOKEN}" "${CU_API}/list/${CU_LIST_ID}/field" \
+  | jq -c --arg f "$CU_FIELD_CLIENT" '[.fields[]? | select(.id == $f) | .type_config.options[]? | {id, name}]' \
+  2>/dev/null || true )
+if [ -n "$CU_CLIENT_OPTIONS" ] && [ "$CU_CLIENT_OPTIONS" != "[]" ]; then
+  CU_CLIENT_OPTION=$( jq -r --arg v "$CU_CLIENT_ID" \
+    '[.[] | select(.id == $v or ((.name // "") | ascii_downcase) == ($v | ascii_downcase)) | .id][0] // empty' \
+    <<<"$CU_CLIENT_OPTIONS" 2>/dev/null || true )
+  if [ -n "$CU_CLIENT_OPTION" ]; then
+    CU_CLIENT_ID="$CU_CLIENT_OPTION"
+  else
+    log "Warning: client_id '${CU_CLIENT_ID}' is not an option of the Client field on list ${CU_LIST_ID}; creating the task without it. Fix client_id in update-data."
+    CU_CLIENT_ID=""
+  fi
+fi
+
 START_DATE_MS="$(( $(date +%s) * 1000 ))"   # ms epoch; portable across macOS/Linux
+# Due a week after the ticket is opened, matching create-productive-ticket.
+DUE_DATE_MS="$(( START_DATE_MS + 7 * 24 * 60 * 60 * 1000 ))"
 
 # Build the request body with jq so quotes/newlines in the site name or project list can
-# never produce invalid JSON. assignees/status are optional; omitting a status lets the
-# list use its own default. markdown_content is what ClickUp renders; description carries
-# the same text as a plain fallback.
-CU_JSON_DATA=$(jq -n \
-  --arg name "$CU_TICKET_TITLE" \
-  --arg desc "$CU_BODY_MESSAGE" \
-  --arg client_id "$CU_CLIENT_ID" \
-  --arg client_field "$CU_FIELD_CLIENT" \
-  --arg assignee "${CU_ASSIGNEE_ID:-}" \
-  --arg status "${CU_STATUS:-}" \
-  --argjson start_date "$START_DATE_MS" \
-  '{
-    name: $name,
-    tags: ["autosec update"],
-    priority: 2,
-    start_date: $start_date,
-    start_date_time: false,
-    notify_all: false,
-    check_required_custom_fields: true,
-    custom_fields: [ { id: $client_field, value: $client_id } ],
-    description: $desc,
-    markdown_content: $desc
-  }
-  + (if $assignee != "" then { assignees: [ ($assignee | tonumber) ] } else {} end)
-  + (if $status   != "" then { status: $status } else {} end)')
+# never produce invalid JSON. assignees/status/client are optional; omitting a status lets
+# the list use its own default. markdown_content is what ClickUp renders; description
+# carries the same text as a plain fallback. $1 is "yes" to send the custom fields.
+cu_json_data() {
+  local with_fields="$1"
+  [ -z "$CU_CLIENT_ID" ] && with_fields="no"
+  jq -n \
+    --arg name "$CU_TICKET_TITLE" \
+    --arg desc "$CU_BODY_MESSAGE" \
+    --arg client_id "$CU_CLIENT_ID" \
+    --arg client_field "$CU_FIELD_CLIENT" \
+    --arg assignee "${CU_ASSIGNEE_ID:-}" \
+    --arg status "${CU_STATUS:-}" \
+    --arg with_fields "$with_fields" \
+    --argjson start_date "$START_DATE_MS" \
+    --argjson due_date "$DUE_DATE_MS" \
+    '{
+      name: $name,
+      priority: 3,
+      start_date: $start_date,
+      start_date_time: false,
+      due_date: $due_date,
+      due_date_time: false,
+      notify_all: false,
+      check_required_custom_fields: ($with_fields == "yes"),
+      description: $desc,
+      markdown_content: $desc
+    }
+    + (if $with_fields == "yes" then { custom_fields: [ { id: $client_field, value: $client_id } ] } else {} end)
+    + (if $assignee != "" then { assignees: [ ($assignee | tonumber) ] } else {} end)
+    + (if $status   != "" then { status: $status } else {} end)'
+}
 
-log "Creating ClickUp ticket in list ${CU_LIST_ID}..."
 RESPONSE_FILE=$(mktemp)
 # No -i, so the body is pure JSON we can parse with jq; capture the HTTP status
 # separately so a non-2xx never aborts the run.
-CU_HTTP=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
-  -X POST "${CU_API}/list/${CU_LIST_ID}/task" \
-  -H "Authorization: ${CU_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "$CU_JSON_DATA") || CU_HTTP="000"
+cu_create_task() {   # $1 the request body; prints the HTTP status
+  local code
+  code=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" \
+    -X POST "${CU_API}/list/${CU_LIST_ID}/task" \
+    -H "Authorization: ${CU_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$1") || code="000"
+  printf '%s' "$code"
+}
+
+log "Creating ClickUp ticket in list ${CU_LIST_ID}..."
+CU_HTTP=$( cu_create_task "$( cu_json_data yes )" )
+
+# A custom-field error (ECODE FIELD_*: a required field the payload does not fill, a value
+# the field does not accept) would otherwise cost the whole ticket. Retry once without the
+# custom fields; a ticket missing its Client is better than no ticket.
+CU_ECODE=$( jq -r '.ECODE // empty' "$RESPONSE_FILE" 2>/dev/null || true )
+if [ "$CU_HTTP" = "400" ] && [[ "$CU_ECODE" == FIELD_* ]]; then
+  log "Warning: ClickUp rejected the custom fields ($(cat "$RESPONSE_FILE" 2>/dev/null || true)); retrying without them. Set the Client field on the task by hand."
+  CU_HTTP=$( cu_create_task "$( cu_json_data no )" )
+fi
 
 if [ "$CU_HTTP" = "200" ] || [ "$CU_HTTP" = "201" ]; then
   TICKET_URL=$(jq -r '.url // empty' "$RESPONSE_FILE" 2>/dev/null || true)

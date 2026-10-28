@@ -1001,9 +1001,14 @@ curl -s -H "Authorization: $CU_TOKEN" \
 ```
 
 The status is checked against the list before the task is created. A name the list does
-not define is logged as a warning and the task opens in the list's default status instead
-of failing. If a create returns HTTP 400, check the `ECODE`: `FIELD_011` = the `client_id`
-isn't a valid drop-down option.
+not define is logged as a warning and the task opens in `Ready for Dev` instead; only when
+the list has neither does it open in the list's default status. It never fails the create.
+
+The `client_id` is checked against the options of the list's "Client" drop-down first. The
+option's name (`MCNY`) is accepted as well as its id, and an unknown value is logged and
+left out. If ClickUp still rejects the custom fields (HTTP 400, `ECODE` `FIELD_*`, e.g.
+`FIELD_011` "Custom field value is missing"), the task is created once more without them,
+and the log says to set the Client field by hand.
 
 ### Steps to set the Productive.io integration (optional)
 
@@ -1181,7 +1186,11 @@ AutoSec branch. This is on by default; set `UPDATE_RUN_DB_UPDATES=NO` to turn it
       is set, it is run against the restored database.
    5. Confirms Drupal connects, then asks Drupal where its configuration sync directory is
       and **aborts unless that directory really holds this site's configuration**.
-   6. `drush updatedb` to drain updates already pending on the canonical environment, then
+   6. Creates the public files directory (`775`) and, when the site sets one, the private
+      files directory (`770`), at the paths Drupal reports. They are never in git, and an
+      update hook that writes a file (anchor_link's `allow_anchor_name_attribute` copies one
+      into `public://`) would otherwise fail `updatedb`.
+   7. `drush updatedb` to drain updates already pending on the canonical environment, then
       `drush config:import` so the active configuration matches what is in git, then a
       baseline `drush config:export`.
 2. Then, for **each** updated package, `scripts/updates/apply-db-updates` runs
@@ -1192,7 +1201,7 @@ The result is one `composer.*` commit and (where there was anything to export) o
 configuration commit per package, so a reviewer can see exactly which module caused which
 configuration change.
 
-#### Why the `config:import` in step 1.6 matters
+#### Why the `config:import` in step 1.7 matters
 
 It is the step that makes the diffs readable. A live database's configuration has almost
 always drifted from what is in `./config`. Export straight from a restored live database
@@ -1360,8 +1369,12 @@ entirely.
 
 ### Why packages are updated one at a time
 
-The run updates each package with its own `composer update <package> --with-dependencies`
-rather than a single bulk `composer update`. Two reasons:
+The run updates each package with its own
+`composer update <package> --with-all-dependencies` rather than a single bulk
+`composer update`. `--with-all-dependencies` lets a release bring the newer dependencies it
+needs, including ones `composer.json` also requires directly, always within their
+constraints. Whatever moved along with a package is listed under it in the PR and in its
+commit message ("Also updated as dependencies: …"). Two reasons for going one at a time:
 
 1. **Attribution.** Each package gets its own composer commit and, where it changed
    configuration, its own config commit — so a reviewer can see which module caused which
@@ -1377,6 +1390,16 @@ rather than a single bulk `composer update`. Two reasons:
    A per-package update is a *partial* update and does not re-resolve everything, so it
    sidesteps this. A package that cannot move (an exact pin, a conflict) is logged and
    skipped; the rest of the run continues.
+
+A package whose update fails is **rolled back, never committed**: `composer.json`,
+`composer.lock` (and `patches.lock.json` when tracked) go back to the last commit and
+`composer install` puts `vendor/` back with them. This matters most for patches. When a
+patch in `composer.json` no longer applies to the new release, composer-patches fails
+*after* composer has already written the new version into `composer.lock`. Without the
+rollback, that version would be committed along with the next package, and every later
+`composer install` would fail on the patch. The package is reported in the PR and the
+ticket instead, naming the patch to re-roll or remove. This is the same in security and
+routine runs.
 
 ### Choosing the packages yourself
 

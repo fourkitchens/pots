@@ -178,9 +178,8 @@ PR_JSON_DATA=$(jq -n \
       attributes: ({
         title: $title,
         description: $desc,
-        due_date: $due,
-        tag_list: ["autosec update"]
-      } + (if $status != "" then { workflow_status_id: ($status | tonumber) } else {} end)),
+        due_date: $due
+      } +(if $status != "" then { workflow_status_id: ($status | tonumber) } else {} end)),
       relationships: (
         { project: { data: { type: "projects", id: $project } } }
         + (if $task_list != "" then { task_list: { data: { type: "task_lists", id: $task_list } } } else {} end)

@@ -44,8 +44,10 @@ if [ -z "$PROJECT" ]; then
 fi
 
 # setup-drupal-env could not prepare a usable site, or an earlier package's updates failed.
+# The flag holds the reason; name it, or every skipped package looks like its own failure.
 if [ -f "$STATE_DIR/disabled" ]; then
-  log "The database phase is disabled; skipping $PROJECT."
+  DISABLED_REASON="$( head -n 1 "$STATE_DIR/disabled" 2>/dev/null || true )"
+  log "The database phase is disabled${DISABLED_REASON:+ ($DISABLED_REASON)}; skipping $PROJECT."
   exit 0
 fi
 
@@ -68,7 +70,7 @@ if ! "${DRUSH_CMD[@]}" updatedb -y > "$UPDB_LOG" 2>&1; then
   cat "$UPDB_LOG" >&2
   log "'drush updatedb' FAILED after updating $PROJECT."
   note "\`drush updatedb\` failed after updating **$PROJECT**, so no configuration was exported for it or for any later package. Run the database updates and export the configuration by hand before merging."
-  : > "$STATE_DIR/disabled"
+  printf '%s\n' "'drush updatedb' failed after updating $PROJECT" > "$STATE_DIR/disabled"
   exit 0
 fi
 cat "$UPDB_LOG" >&2
@@ -87,7 +89,7 @@ log "Exporting configuration"
 if ! "${DRUSH_CMD[@]}" config:export -y >&2; then
   log "'drush config:export' FAILED after updating $PROJECT."
   note "\`drush config:export\` failed after updating **$PROJECT**. Export the configuration by hand before merging."
-  : > "$STATE_DIR/disabled"
+  printf '%s\n' "'drush config:export' failed after updating $PROJECT" > "$STATE_DIR/disabled"
   exit 0
 fi
 

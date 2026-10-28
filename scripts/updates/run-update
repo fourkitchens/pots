@@ -177,6 +177,70 @@ record_failure() {
   printf '%s\t%s\n' "$1" "$2" >> "$UPDATE_STATE_DIR/failed"
 }
 
+# A patch that no longer applies to the new release, as one reportable line; empty when the
+# log shows no patch failure.
+#
+# composer-patches 2.x throws, so `composer update` fails -- but only after the lock file
+# has been written. 1.x with composer-exit-on-patch-failure off only prints a warning and
+# exits 0. Either way the release must not be committed: it would install unpatched, or
+# break every later `composer install`. 2.x wraps its message across lines inside a boxed
+# error, so the log is joined into one line before matching.
+patch_failure_reason() {
+  local log="$1" joined patch target
+  local v2_re='No available patcher was able to apply patch ([^ ]+) ?([^ ]*) to ([^ ]+)'
+  [ -f "$log" ] || return 0
+  joined="$( sed "s/$( printf '\033' )\[[0-9;]*m//g" "$log" | tr '\r\n' '  ' | tr -s ' ' )"
+  if [[ "$joined" =~ $v2_re ]]; then
+    # The wrap can split the patch path itself ("panels-3465159- mr-31.patch"); the second
+    # capture then holds its tail.
+    patch="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+    target="${BASH_REMATCH[3]}"
+    printf 'Patch `%s` no longer applies to the new release of %s, so the update was rolled back. Re-roll or remove the patch, then update it by hand.' "$patch" "$target"
+  elif grep -qE 'Could not apply patch|Cannot apply patch' "$log" 2>/dev/null; then
+    # 1.x: "Could not apply patch! Skipping. The error was: Cannot apply patch <url>"
+    patch="$( grep -oE 'Cannot apply patch [^ ]+' "$log" | head -n 1 | sed 's/^Cannot apply patch //' | tr -d '\r' )"
+    printf 'Patch %sno longer applies to the new release, so the update was rolled back. Re-roll or remove the patch, then update it by hand.' "${patch:+\`$patch\` }"
+  fi
+}
+
+# Put composer.json, composer.lock and the installed packages back to the last commit.
+#
+# A composer run that fails after "Writing lock file" -- a patch that no longer applies, a
+# plugin or a scaffold step blowing up -- leaves the new versions in composer.lock. Left
+# there, the next package's `git add composer.*` commits them under the wrong name, and
+# without a reinstall every later update runs against a half-updated vendor/.
+rollback_package_update() {
+  local files=( composer.json composer.lock )
+  git ls-files --error-unmatch patches.lock.json >/dev/null 2>&1 && files+=( patches.lock.json )
+  git checkout -- "${files[@]}"
+  if ! $COMPOSER_CMD install --no-interaction > "$UPDATE_STATE_DIR/rollback.log" 2>&1; then
+    cat "$UPDATE_STATE_DIR/rollback.log" >&2
+    echo "WARNING: composer install failed while rolling back $1." >&2
+    printf '%s\n' "Rolling back $1 left vendor/ out of step with composer.lock (composer install failed); later updates in this run may be affected. See the job log${CIRCLE_BUILD_URL:+: $CIRCLE_BUILD_URL}." \
+      >> "$UPDATE_STATE_DIR/notes"
+  fi
+}
+
+# The packages, other than the one named, whose locked version differs between the last
+# commit and the working composer.lock, as "name (old -> new)" joined by ", ". These are the
+# dependencies --with-all-dependencies moved along with it. The core group is all
+# drupal/core*, so none of those are listed.
+dependency_changes() {
+  local skip="$1" old="$UPDATE_STATE_DIR/lock-before.json" new="composer.lock"
+  # A file, not --argjson: a composer.lock is easily larger than one command-line argument
+  # is allowed to be.
+  git show HEAD:composer.lock > "$old" 2>/dev/null || echo '{}' > "$old"
+  jq -rn --arg skip "$skip" --slurpfile old "$old" --slurpfile new "$new" '
+      def versions($l): [ ($l.packages // []) + ($l["packages-dev"] // []) | .[] | { (.name): .version } ] | add // {};
+      versions($old[0]) as $o | versions($new[0]) as $n
+      | [ $n | to_entries[]
+          | select(.key != $skip)
+          | select($skip != "drupal/core" or (.key | test("^drupal/core(-|$)") | not))
+          | select(($o[.key] // "") != .value)
+          | "\(.key) (\($o[.key] // "new") -> \(.value))" ]
+      | join(", ")' 2>/dev/null || true
+}
+
 # Packages the composer-mode selector marked as safe to take across a major boundary,
 # written as "name<TAB>reason" by select-packages-composer.
 major_allowed() {
@@ -468,11 +532,11 @@ if [ -n "$PACKAGES" ]; then
     if [ ! -f "$UPDATE_STATE_DIR/env" ] && [ ! -f "$UPDATE_STATE_DIR/disabled" ]; then
       printf '%s\n' "Preparing the Drupal environment failed without recording a reason (see the job log${CIRCLE_BUILD_URL:+: $CIRCLE_BUILD_URL}), so no database updates were run and no configuration was exported. Run the database updates and export the configuration by hand before merging." \
         >> "$UPDATE_STATE_DIR/notes"
-      : > "$UPDATE_STATE_DIR/disabled"
+      printf '%s\n' "preparing the Drupal environment failed without recording a reason" > "$UPDATE_STATE_DIR/disabled"
     fi
   else
     echo "UPDATE_RUN_DB_UPDATES is 'NO'. Skipping database updates and configuration export."
-    : > "$UPDATE_STATE_DIR/disabled"
+    printf '%s\n' "UPDATE_RUN_DB_UPDATES is 'NO'" > "$UPDATE_STATE_DIR/disabled"
   fi
 
   # Update one package at a time. This is a *partial* composer update, which matters: a full
@@ -498,26 +562,31 @@ if [ -n "$PACKAGES" ]; then
     fi
     echo "Updating $PROJECT_LABEL"
     echo "-----------------"
-    # Core moves as a set, so it needs --with-all-dependencies; a single package is kept to
-    # --with-dependencies, which is the narrower, more predictable partial update.
-    if [ "$IS_CORE_GROUP" = "yes" ]; then
-      UPDATE_FLAG="--with-all-dependencies"
-    else
-      UPDATE_FLAG="--with-dependencies"
-    fi
+    # --with-all-dependencies for everything, core and single packages alike: a release that
+    # needs a newer dependency gets it, even when that dependency is also required directly
+    # in composer.json (--with-dependencies leaves those locked, so the update stalls).
+    # Constraints still apply, so nothing moves past what composer.json allows. Whatever
+    # moved along with the package is listed under it in the PR.
+    UPDATE_FLAG="--with-all-dependencies"
     # A package can legitimately refuse to move (an exact version pin, a conflicting
     # dependency). That does not fail the run -- the other packages still get updated --
     # but it must not vanish either: a package nobody notices is stuck is a package that
     # stays un-updated for months. Capture the reason for the PR body and the ticket.
     UPDATE_LOG="$UPDATE_STATE_DIR/update-$( printf '%s' "$PROJECT_LABEL" | tr '/*' '--' ).log"
-    if ! $COMPOSER_CMD update "${UPDATE_TARGETS[@]}" "$UPDATE_FLAG" > "$UPDATE_LOG" 2>&1; then
-      cat "$UPDATE_LOG" >&2
-      FAILURE_REASON="$( summarise_composer_failure "$UPDATE_LOG" )"
+    UPDATE_RC=0
+    $COMPOSER_CMD update "${UPDATE_TARGETS[@]}" "$UPDATE_FLAG" > "$UPDATE_LOG" 2>&1 || UPDATE_RC=$?
+    cat "$UPDATE_LOG" >&2
+    # A patch that no longer applies fails the package even when composer exited 0
+    # (composer-patches 1.x only warns). Nothing of a failed package may be committed, and
+    # composer may already have rewritten composer.lock, so roll it back before moving on.
+    PATCH_FAILURE="$( patch_failure_reason "$UPDATE_LOG" )"
+    if [ "$UPDATE_RC" -ne 0 ] || [ -n "$PATCH_FAILURE" ]; then
+      FAILURE_REASON="${PATCH_FAILURE:-$( summarise_composer_failure "$UPDATE_LOG" )}"
       record_failure "$PROJECT_LABEL" "${FAILURE_REASON:-composer update failed; see the CI log.}"
-      echo "Could not update $PROJECT_LABEL; recorded for the PR and skipping it."
+      rollback_package_update "$PROJECT_LABEL"
+      echo "Could not update $PROJECT_LABEL; rolled it back, recorded it for the PR and skipping it."
       continue
     fi
-    cat "$UPDATE_LOG" >&2
     [ "$IS_CORE_GROUP" = "yes" ] && check_core_versions_match
 
     ##
@@ -548,6 +617,7 @@ if [ -n "$PACKAGES" ]; then
     MAJOR_UPGRADE_NOTE=""
     ALLOW_MAJOR="no"
     MAJOR_REASON=""
+    RAISE_LOG=""
     if [ "$UPDATE_MODE" = "security" ] && package_still_vulnerable "$PROJECT_LABEL"; then
       ALLOW_MAJOR="yes"
       MAJOR_REASON="No security fix is available within the current major"
@@ -649,14 +719,30 @@ if [ -n "$PACKAGES" ]; then
         fi
       fi
     fi
+    # The constraint raise is a second composer run, and a patch can fail there too. Drop
+    # the whole package, in-major update included: a patched package is committed with its
+    # patches applied or not at all.
+    PATCH_FAILURE="$( [ -n "$RAISE_LOG" ] && patch_failure_reason "$RAISE_LOG" || true )"
+    if [ -n "$PATCH_FAILURE" ]; then
+      record_failure "$PROJECT_LABEL" "$PATCH_FAILURE"
+      rollback_package_update "$PROJECT_LABEL"
+      echo "Could not update $PROJECT_LABEL; rolled it back, recorded it for the PR and skipping it."
+      continue
+    fi
     # Check for changes to what is about to be committed. Only composer.* is staged, so
     # the check is scoped to it: setup-drupal-env leaves other files dirty (the CI settings
     # file, config_split directories), and a package that did not move would otherwise
     # reach `git commit` with nothing staged and abort the run under set -e.
     if [[ `git status --porcelain -- composer.json composer.lock` ]]; then
+        DEPENDENCY_CHANGES="$( dependency_changes "$PROJECT_LABEL" )"
         #committing recent changes.
         git add composer.*
-        git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL"
+        if [ -n "$DEPENDENCY_CHANGES" ]; then
+          git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL" \
+            -m "Also updated as dependencies: ${DEPENDENCY_CHANGES}"
+        else
+          git commit -m "${COMMIT_PREFIX}: Updated project $PROJECT_LABEL"
+        fi
 
         # Run the database updates this package brings with it and commit any configuration
         # they changed. Always exits 0; prints a Markdown summary for the PR body.
@@ -680,6 +766,9 @@ if [ -n "$PACKAGES" ]; then
           AUX="- Update the contrib module: [${PROJECT_LABEL}](https://www.drupal.org/project/${AUX}/releases)."
         fi
         MESSAGE+="${AUX}"$'\n'
+        if [ -n "$DEPENDENCY_CHANGES" ]; then
+          MESSAGE+="  - Also updated as dependencies: ${DEPENDENCY_CHANGES}"$'\n'
+        fi
         # Flag a crossed major boundary directly under the package it applies to.
         if [ -n "$MAJOR_UPGRADE_NOTE" ]; then
           MESSAGE+="${MAJOR_UPGRADE_NOTE}"$'\n'
