@@ -490,9 +490,6 @@ jobs:
       # provider; the rest is unpacked by that provider's script.
       UPDATE_DATA: << pipeline.parameters.update-data >>
     steps:
-      - run:
-          name: Upgrade composer
-          command: composer self-update
       - checkout
       - php/install_composer
       - php/install_packages
