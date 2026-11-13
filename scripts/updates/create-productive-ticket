@@ -210,7 +210,7 @@ if [ "$( jq -r 'length' <<<"$PR_WANTED_FIELDS" )" != "0" ]; then
       for field_id in $( jq -r --argjson wanted "$PR_WANTED_FIELDS" '
           def norm: tostring | ascii_downcase | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ");
           ($wanted | keys | map(norm)) as $keys
-          | .data[] | select((.attributes.data_type | tostring) as $t | $t == "3" or $t == "5")
+          | .data[] | select((.attributes.data_type_id // .attributes.data_type | tostring) as $t | $t == "3" or $t == "5")
           | select(.id as $id | (.attributes.name | norm) as $n | $keys | index($id) or index($n))
           | .id' <<<"$PR_FIELDS_DOC" 2>/dev/null || true ); do
         PR_FIELD_OPTIONS=$( jq -c --arg f "$field_id" --argjson doc "$( pr_get "/custom_field_options?filter[custom_field_id]=${field_id}&page[size]=200" | jq -c . 2>/dev/null || echo '{}' )" \
@@ -219,11 +219,14 @@ if [ "$( jq -r 'length' <<<"$PR_WANTED_FIELDS" )" != "0" ]; then
       done
     fi
 
-    # The task fields that can be set on this project, with their options.
+    # The task fields that can be set on this project, with their options. Productive
+    # reports a field's type as data_type_id (3 = select, 5 = multi-select); data_type is
+    # kept only as a fallback. Without the type every select field would be sent its option
+    # name instead of its option id, and Productive rejects the task with "value not valid".
     PR_FIELDS=$( jq -c --arg project "$PR_PROJECT_ID" --argjson options "$PR_FIELD_OPTIONS" '
         [.data[] | select(.attributes.archived_at == null)
           | select((.relationships.project.data.id // null) as $p | $p == null or $p == $project)
-          | { id, name: .attributes.name, type: (.attributes.data_type | tostring),
+          | { id, name: .attributes.name, type: (.attributes.data_type_id // .attributes.data_type | tostring),
               options: ($options[.id] // []) }]' <<<"$PR_FIELDS_DOC" 2>/dev/null || echo '[]' )
 
     PR_RESOLVED=$( jq -c --argjson wanted "$PR_WANTED_FIELDS" '
