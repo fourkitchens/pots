@@ -13,7 +13,7 @@ TICKET_DEFAULT_STATUS="Ready for Dev"
 
 ticket_title() {
   if [ "${UPDATE_MODE:-security}" = "composer" ]; then
-    printf '%s' "Maintenance Updates For Your Website - ${SITE_NAME}"
+    printf '%s' "Minor Upgrades For Your Website - ${SITE_NAME}"
   else
     printf '%s' "Security Updates Required For Your Website - ${SITE_NAME}"
   fi
@@ -23,7 +23,7 @@ ticket_title() {
 # beside the calling script (running from a POTS checkout, where there is no vendor/).
 # Never only the calling script's directory: a consumer who overrides just the ticket
 # script runs it from .circleci/scripts/updates/, where the template does not exist.
-# The wording differs between a security run and a routine maintenance run, so the template
+# The wording differs between a security run and a minor upgrades run, so the template
 # is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
 ticket_template() {
   local name="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md" candidate
