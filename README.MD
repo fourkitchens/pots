@@ -504,13 +504,14 @@ ever active for a run:
 | `ticketing_system`   | any        | no       | `clickup`, `productive` or `none`. Falls back to the `TICKETING_SYSTEM` env var, then to `productive` |
 | `list_id`            | clickup    | yes      | ClickUp list the task is created in                          |
 | `client_id`          | clickup    | yes      | value for the "Client" custom field (a drop-down option UUID)|
-| `status`             | both       | no       | status **name** the ticket opens in; defaults to `Ready for Dev` |
+| `status`             | both       | no       | status **name** the ticket opens in; defaults to `Ready for Dev` (ClickUp) or `Ready to Start` (Productive) |
 | `organization_id`    | productive | yes      | Productive organization id (`X-Organization-Id`)             |
 | `project_id`         | productive | yes      | the project (workspace) the task is created in               |
 | `task_list_id`       | productive | no       | task list / milestone to file the task under                 |
 | `board_id`           | productive | no       | board (folder) to file the task under                        |
 | `workflow_status_id` | productive | no       | workflow status id; overrides `status` and skips the name lookup |
 | `task_url_template`  | productive | no       | override the link built for the PR body                      |
+| `custom_fields`      | productive | no       | object of task custom field **name** → value, merged over [the defaults file](#default-task-fields) |
 | `assignee_id`        | both       | no       | user/person id to assign                                     |
 
 The API token is deliberately *not* in here — pipeline parameters are readable through the
@@ -1048,9 +1049,10 @@ in `update-data` so it can be set per-trigger.
    | `task_list_id`       | no       | Task list / milestone to file the task under             |
    | `board_id`           | no       | Board (folder) to file the task under                    |
    | `assignee_id`        | no       | Person id to assign                                      |
-   | `status`             | no       | Workflow status **name** to open the task in; defaults to `Ready for Dev` |
+   | `status`             | no       | Workflow status **name** to open the task in; defaults to the `status` of [the defaults file](#default-task-fields) (`Ready to Start`) |
    | `workflow_status_id` | no       | Workflow status id; overrides `status` and skips the lookup |
    | `task_url_template`  | no       | Override the link built for the PR body (see below)      |
+| `custom_fields`      | no       | Task custom fields for this site only, as field **name** → value; merged over [the defaults file](#default-task-fields) |
 
    Example: `{"organization_id":"31","project_id":"123456","task_list_id":"789"}`
 
@@ -1071,6 +1073,48 @@ in `update-data` so it can be set per-trigger.
    so when the creator is subscribed the list is set to the assignee alone (or nobody).
 
    The PR body links the task by its number (`Productive #123`).
+
+#### Default task fields
+
+The status a task opens in and the custom fields it is created with are set in
+[`scripts/updates/productive-ticket-fields.json`](scripts/updates/productive-ticket-fields.json),
+not in the script. To change a default, edit the file: add a line to set another field, or
+delete a line to stop setting one.
+
+```json
+{
+  "status": "Ready to Start",
+  "custom_fields": {
+    "Sprint Points": "3",
+    "Task Type": "Task",
+    "Review Status": "Unstarted",
+    "Priority": "Normal",
+    "Discipline": "BED"
+  },
+  "by_mode": {
+    "security": { "custom_fields": { "Task Type": "Security Update" } },
+    "composer": {}
+  }
+}
+```
+
+- Fields and options are written **by name**, as Productive shows them. Case and extra
+  spaces do not matter, and an id works too. The script looks the names up in Productive when it runs.
+- `by_mode.security` / `by_mode.composer` is merged over the top level for an AutoSec run
+  or a [minor composer update](#automated-minor-composer-updates) run. With the file above, minor upgrades are filed as `Task` and security updates as `Security Update`.
+- A select field takes one option name. A multiselect field takes a list
+  (`"4K Project": ["POTS"]`). Text and number fields take the value as is.
+- Precedence, highest first: `update-data`'s `custom_fields` and `status` (or
+  `workflow_status_id`), then `by_mode`, then the top level of the file. When the file is missing
+  or does not set a status, the task opens in `PRODUCTIVE_DEFAULT_STATUS` from
+  `ticket-lib.sh` (`Ready to Start`).
+- To change the defaults for one project only, put its own copy at
+  `.circleci/scripts/updates/productive-ticket-fields.json`. That copy replaces the file
+  from POTS completely; it is not merged with it.
+- Nothing here can cost the ticket. A field or option that does not exist is logged as a
+  warning, along with the names that do exist, and skipped. If Productive rejects the
+  fields on create, the task is created again without them, and a warning says to set them
+  by hand.
 
 #### Finding the ids (with `PRODUCTIVE_TOKEN` set)
 

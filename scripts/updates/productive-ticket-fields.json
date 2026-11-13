@@ -1,0 +1,18 @@
+{
+  "status": "Ready to Start",
+  "custom_fields": {
+    "Sprint Points": "3",
+    "Task Type": "Task",
+    "Review Status": "Unstarted",
+    "Priority": "Normal",
+    "Discipline": "BED"
+  },
+  "by_mode": {
+    "security": {
+      "custom_fields": {
+        "Task Type": "Security Update"
+      }
+    },
+    "composer": {}
+  }
+}

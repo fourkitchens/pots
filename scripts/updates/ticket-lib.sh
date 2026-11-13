@@ -9,7 +9,12 @@
 
 # The status a new ticket opens in when update-data does not name one. Matched by name,
 # ignoring case, against the statuses the ClickUp list or the Productive workflow defines.
-TICKET_DEFAULT_STATUS="Ready for Dev"
+# The two providers differ: ClickUp lists still call it "Ready for Dev", while the
+# Productive workflow renamed it "Ready to Start". For Productive, the "status" key of
+# productive-ticket-fields.json wins over PRODUCTIVE_DEFAULT_STATUS; this is the fallback
+# for when that file is missing or does not set one.
+TICKET_DEFAULT_STATUS="Ready for Dev"          # ClickUp
+PRODUCTIVE_DEFAULT_STATUS="Ready to Start"     # Productive
 
 ticket_title() {
   if [ "${UPDATE_MODE:-security}" = "composer" ]; then
@@ -19,14 +24,15 @@ ticket_title() {
   fi
 }
 
-# Resolve the ticket template: consumer override, else the vendored copy, else the copy
-# beside the calling script (running from a POTS checkout, where there is no vendor/).
-# Never only the calling script's directory: a consumer who overrides just the ticket
-# script runs it from .circleci/scripts/updates/, where the template does not exist.
-# The wording differs between a security run and a minor upgrades run, so the template
-# is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
-ticket_template() {
-  local name="TICKET_TEMPLATE-${UPDATE_MODE:-security}.md" candidate
+# ticket_find_file NAME
+#
+# Resolve one of the ticket's support files: consumer override, else the vendored copy,
+# else the copy beside the calling script (running from a POTS checkout, where there is
+# no vendor/). Never only the calling script's directory: a consumer who overrides just
+# the ticket script runs it from .circleci/scripts/updates/, where the file does not
+# exist. Prints the last candidate when none exists, so the caller's error names a path.
+ticket_find_file() {
+  local name="$1" candidate
   for candidate in "./.circleci/scripts/updates/${name}" \
                    "./vendor/fourkitchens/pots/scripts/updates/${name}" \
                    "$(dirname "$0")/${name}"; do
@@ -36,6 +42,12 @@ ticket_template() {
     fi
   done
   printf '%s' "$(dirname "$0")/${name}"
+}
+
+# The wording differs between a security run and a minor upgrades run, so the template
+# is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
+ticket_template() {
+  ticket_find_file "TICKET_TEMPLATE-${UPDATE_MODE:-security}.md"
 }
 
 # ticket_markdown PROJECTS_UPDATED
