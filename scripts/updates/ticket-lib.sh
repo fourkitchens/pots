@@ -46,8 +46,35 @@ ticket_find_file() {
 
 # The wording differs between a security run and a minor upgrades run, so the template
 # is chosen by UPDATE_MODE (exported by run-update; defaults to security when run by hand).
+#
+# It can also differ by client engagement (the defaults are written for clients whose
+# updates are included in their plan). A project names its own wording with
+# "ticket_template" in the update-data blob, falling back to the TICKET_TEMPLATE_VARIANT
+# env var -- the same blob-then-env order as ticketing_system. A variant "fwt" reads
+# TICKET_TEMPLATE-<mode>-fwt.md, found like any other ticket file. A variant with no file
+# for this mode is logged and the default template is used, so it never costs the ticket.
 ticket_template() {
-  ticket_find_file "TICKET_TEMPLATE-${UPDATE_MODE:-security}.md"
+  local mode="${UPDATE_MODE:-security}" variant="" file
+  if [ -n "${UPDATE_DATA:-}" ] && [ "${UPDATE_DATA}" != "{}" ] \
+     && printf '%s' "$UPDATE_DATA" | jq empty >/dev/null 2>&1; then
+    variant="$( printf '%s' "$UPDATE_DATA" | jq -r '.ticket_template // empty' )"
+  fi
+  variant="${variant:-${TICKET_TEMPLATE_VARIANT:-}}"
+  if [ -n "$variant" ]; then
+    # The variant becomes part of a file name: letters, digits, - and _ only, so it can
+    # never point outside the template directories.
+    if [[ ! "$variant" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "Warning: ticket template variant '${variant}' may only use letters, digits, - and _; using the default template." >&2
+    else
+      file="$( ticket_find_file "TICKET_TEMPLATE-${mode}-${variant}.md" )"
+      if [ -f "$file" ]; then
+        printf '%s' "$file"
+        return
+      fi
+      echo "Warning: no TICKET_TEMPLATE-${mode}-${variant}.md for ticket template variant '${variant}'; using the default template." >&2
+    fi
+  fi
+  ticket_find_file "TICKET_TEMPLATE-${mode}.md"
 }
 
 # ticket_markdown PROJECTS_UPDATED

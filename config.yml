@@ -38,7 +38,9 @@ parameters:
                     task_url_template (optional)
         productive: custom_fields (optional; field name -> value, over
                     scripts/updates/productive-ticket-fields.json)
-        both:       assignee_id (optional), status (optional; a status name,
+        both:       ticket_template (optional; body variant, reads
+                    TICKET_TEMPLATE-<mode>-<name>.md instead of the default),
+                    assignee_id (optional), status (optional; a status name,
                     defaults to "Ready for Dev" on ClickUp, "Ready to Start" on
                     Productive)
       The API token is NOT here - it is a CircleCI project env var (CU_TOKEN or

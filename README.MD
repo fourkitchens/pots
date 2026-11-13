@@ -513,6 +513,7 @@ ever active for a run:
 | `task_url_template`  | productive | no       | override the link built for the PR body                      |
 | `custom_fields`      | productive | no       | object of task custom field **name** → value, merged over [the defaults file](#default-task-fields) |
 | `assignee_id`        | both       | no       | user/person id to assign                                     |
+| `ticket_template`    | both       | no       | ticket body variant: uses `TICKET_TEMPLATE-<mode>-<name>.md` instead of the default (see [Custom ticket text](#custom-ticket-text)). Falls back to the `TICKET_TEMPLATE_VARIANT` env var |
 
 The API token is deliberately *not* in here — pipeline parameters are readable through the
 CircleCI API and UI, so the token is the `CU_TOKEN` or `PRODUCTIVE_TOKEN` env var instead.
@@ -979,6 +980,7 @@ so they can be set per-trigger without touching config:
    | `client_id`   | yes      | value for the "Client" custom field (a **drop-down option UUID**) |
    | `status`      | no       | a status **name** on the list; defaults to `Ready for Dev`       |
    | `assignee_id` | no       | ClickUp user id to assign                                        |
+   | `ticket_template` | no   | ticket body variant; see [Custom ticket text](#custom-ticket-text) |
 
    Example: `{"list_id":"901327866278","client_id":"<option-uuid>","status":"in progress"}`
 
@@ -1053,6 +1055,7 @@ in `update-data` so it can be set per-trigger.
    | `workflow_status_id` | no       | Workflow status id; overrides `status` and skips the lookup |
    | `task_url_template`  | no       | Override the link built for the PR body (see below)      |
 | `custom_fields`      | no       | Task custom fields for this site only, as field **name** → value; merged over [the defaults file](#default-task-fields) |
+| `ticket_template`    | no       | Ticket body variant; see [Custom ticket text](#custom-ticket-text) |
 
    Example: `{"organization_id":"31","project_id":"123456","task_list_id":"789"}`
 
@@ -1146,6 +1149,44 @@ explanation under it as a code block. ClickUp gets the body as Markdown
 template has a blank line, because Productive puts no space between paragraphs. Keep
 `[PROJECTS]` on a line of its own in an overridden template to get the list. Left inline,
 it gets the old comma-separated form.
+
+#### Custom ticket text
+
+The default templates are written for clients whose updates are included in their plan:
+`TICKET_TEMPLATE-security.md` and `TICKET_TEMPLATE-composer.md`. When a client's
+engagement needs other wording, for example one where updates count against the
+subscription hours, give the project its own template. There are two ways to do it:
+
+- **Replace the default for one project.** Commit
+  `.circleci/scripts/updates/TICKET_TEMPLATE-<mode>.md` to the project. It is used
+  instead of the POTS copy for that mode.
+- **Name a variant.** Set `"ticket_template": "<name>"` in `update-data`, or the
+  `TICKET_TEMPLATE_VARIANT` env var. The body then comes from
+  `TICKET_TEMPLATE-<mode>-<name>.md`, so `"ticket_template": "fwt"` reads
+  `TICKET_TEMPLATE-security-fwt.md` on a security run and `TICKET_TEMPLATE-composer-fwt.md`
+  on a minor upgrades run. The file is looked for in `.circleci/scripts/updates/` first,
+  then in POTS (`scripts/updates/`), so a variant several projects share can be added to
+  POTS once. The name may use letters, digits, `-` and `_` only. If the file is missing for
+  a mode, the run logs a warning and uses the default template for that mode.
+
+`<mode>` is `security` for AutoSec and `composer` for minor upgrades. The variant changes the
+body only. The title stays the same. A template is plain Markdown with these placeholders,
+filled in at run time:
+
+| placeholder   | replaced with                                                                  |
+| ------------- | ------------------------------------------------------------------------------ |
+| `[SITE_NAME]` | the site name                                                                  |
+| `[PROJECTS]`  | the updated projects, as a bullet list when it is on a line of its own         |
+| `[FAILURES]`  | the packages that could not be updated and why, or nothing when all succeeded |
+
+Do not add a pull request link: it is appended to every body automatically.
+
+POTS ships one variant, `fwt`, for clients whose security updates are **not** included in
+their plan: [`TICKET_TEMPLATE-security-fwt.md`](scripts/updates/TICKET_TEMPLATE-security-fwt.md)
+is the default security text, except that it says the work counts towards the subscription
+hours. There is no `TICKET_TEMPLATE-composer-fwt.md`, because the default minor upgrades
+text already says that, so an `fwt` project's minor upgrade tickets use the default (the
+run logs that it fell back).
 
 The PR is opened before the ticket, so the ticket description can end with a link to it,
 under **Pull request ready for internal review**. The ticket link is then filled into the
