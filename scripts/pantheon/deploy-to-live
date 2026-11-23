@@ -13,7 +13,8 @@ else
 fi
 
 echo "Backing up Production."
-terminus backup:create "$TERMINUS_SITE".live --element=db
+# Pantheon rejects manual backups kept longer than 180 days (Nov 2026).
+terminus backup:create "$TERMINUS_SITE".live --element=db --keep-for=180
 
 echo "Deploying to Production"
 terminus env:deploy "$TERMINUS_SITE".live

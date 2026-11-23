@@ -251,7 +251,9 @@ else
 
   if [[ "${UPDATE_CREATE_BACKUP:-NO}" == "YES" ]]; then
     log "Creating a fresh database backup of $TERMINUS_SITE.$DB_ENV"
-    terminus -n backup:create "$TERMINUS_SITE.$DB_ENV" --element=db
+    # Pantheon rejects manual backups kept longer than 180 days (Nov 2026).
+    # This backup only feeds the download below, so keep it for 30 days.
+    terminus -n backup:create "$TERMINUS_SITE.$DB_ENV" --element=db --keep-for=30
   fi
 
   log "Downloading the database from $TERMINUS_SITE.$DB_ENV"
