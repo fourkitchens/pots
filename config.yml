@@ -85,7 +85,7 @@ parameters:
       builds. Note the Build Tools plugin formally targets Terminus ^3, though it
       currently also works under 4.x.
     type: string
-    default: "4.3.2"
+    default: "4.3.5"
   tz:
     description: The timezone definition.
     type: string
